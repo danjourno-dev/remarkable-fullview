@@ -6,9 +6,14 @@ last session left off.
 
 ## Current stage
 
-**Stage 1 — Infrastructure (CDK) + deploy workflow** — code complete,
-blocked on Dan for Checkpoints 1.1-1.3 (all require manual AWS/GitHub
-console or CLI actions). See Decisions and Next up below.
+**Stage 2 — Domain + Sync API** — code complete, tested locally, not yet
+deployed. `Fullview.Domain` entities/sync DTOs, `Fullview.Api` `/sync`
+handler, and the CDK changes (new GSI + Lambda + route) are all written,
+build clean, and pass `dotnet format --verify-no-changes` and `cdk synth`.
+**Not yet done:** push to `main` (triggers `cd-infra.yml`, needs Dan's
+`production` environment approval same as Stage 1) and then run the
+HTTP-based convergence integration test against the real deployed `/sync`
+endpoint to fully close out the Done criteria. See Next up.
 
 **Stage 3, Checkpoint 3.1 (device prep) is already complete** — done by Dan
 outside any tracked session, ahead of Stage 3 itself. See Decisions below;
@@ -73,6 +78,51 @@ do not redo it when Stage 3 comes up.
   `Amazon.CDK.Lib` 2.261.0 needs CLI >= 2.1126.0).
 - Did not yet run any Checkpoint 1.1-1.3 manual step (OIDC trust, `cdk
   bootstrap`, first deploy) — those are blocking and need Dan.
+
+### 2026-07-11 — Session 4 (Stage 2, code)
+
+- `Fullview.Domain`: `SyncContext` enum; abstract `SyncEntity` base (Id, Context,
+  UpdatedAt, UpdatedBy, Deleted, computed `SortKey`) using
+  `[JsonPolymorphic]`/`[JsonDerivedType]` (native to `System.Text.Json` on
+  .NET 8, no extra package) so a `List<SyncEntity>` round-trips through JSON
+  without a custom converter. Eight concrete entities per B5/B3: `Todo`,
+  `AgendaEvent` (with Source/ExternalId/ExternalEtag/ReadOnly for the Stage
+  6.5 Google puller), `Meal`, `ShoppingItem`, `Recipe`, `Routine`,
+  `RoutineCheck`, `InboxPage`. `SyncRequest`/`SyncResponse` protocol DTOs.
+- `Fullview.Api`: `ISyncStore` abstraction + `SyncService` (pure LWW/idempotent
+  apply + delta-pull logic, no AWS types) + `DynamoSyncStore` (real
+  DynamoDB-backed implementation using the Document API; entities stored
+  whole as a `data` JSON blob alongside queryable `pk`/`sk`/`entityType`/
+  `context`/`updatedAt`/`deleted`/`gsi1pk`/`gsi1sk` attributes). New
+  `SyncFunction` Lambda (same package as `HealthFunction`, different
+  handler) parses the POST body, calls `SyncService`, returns 200/400.
+- `Fullview.Infra`: added `gsi1` (gsi1pk/gsi1sk) to the existing table for
+  the UpdatedAt-ordered delta query; added `SyncFunction` + `POST /sync`
+  route + `table.GrantReadWriteData` + its own CloudWatch error alarm,
+  mirroring the existing `HealthFunction` wiring.
+- Tests: `Fullview.Domain.Tests` covers polymorphic JSON round-trips.
+  `Fullview.Api.Tests` has an `InMemorySyncStore` test double plus
+  `SyncServiceTests` covering the plan's named conflict cases — newer
+  offline edit beats an older stored edit, a stale edit arriving late is
+  discarded, replaying the same mutation is idempotent, delete produces a
+  tombstone that shows up in the delta, and two `SyncService` instances
+  sharing a store converge. All run in the default `dotnet test`, no AWS
+  needed.
+- `tools/seed-data`: small console app (added to `Fullview.sln` under a new
+  `tools` solution folder) that POSTs a handful of sample Todo/Meal/
+  ShoppingItem entities to a running `/sync` endpoint via
+  `FULLVIEW_API_BASE_URL`. Not a test project, just a manual convenience —
+  mirrors the `tools/google-auth` pattern planned for Stage 6.5.
+- Verified locally: `dotnet build`, `dotnet test --filter "Category!=Integration"`
+  (8/8 pass), `dotnet format --verify-no-changes`, and `cdk synth` (with
+  dummy `FULLVIEW_ALERT_EMAIL`/`CDK_DEFAULT_ACCOUNT`) all pass.
+- **Not done yet:** nothing has been deployed. Pushing this to `main` will
+  trigger `cd-infra.yml`'s `deploy` job, which needs Dan's approval on the
+  `production` environment gate (same mechanism as Stage 1) before the new
+  GSI/Lambda/route actually exist. The literal Done criteria ("integration
+  test drives two fake clients to convergence against deployed stack") is
+  written but only exercises the real thing once `FULLVIEW_API_BASE_URL` is
+  set and it's run manually — see Decisions.
 
 ## Decisions
 
@@ -146,6 +196,28 @@ do not redo it when Stage 3 comes up.
   billing currency is USD — `BudgetLimit.Unit` must match it. Changed to
   `12 USD` (rough £10 equivalent at time of writing) to satisfy the plan's
   "£10/mo guardrail" intent without fighting the account's fixed currency.
+- **Stage 2 — dropped `SyncCursor` as a stored entity.** B5 lists it among
+  the table's entities, but with single-user v1 there's no per-device state
+  worth persisting server-side: the cursor is just the max `UpdatedAt` seen
+  so far, and each client already holds its own last cursor locally. Modelled
+  it as an opaque string the client passes back, not a DynamoDB row. Revisit
+  if v2 (Cognito, multi-device-aware server state) needs it.
+- **Stage 2 — the convergence integration test is HTTP-based, not a raw
+  DynamoDB SDK test.** It POSTs to the real deployed `/sync` endpoint (two
+  simulated clients, one offline-edit-then-web-edit scenario) rather than
+  hitting DynamoDB directly, so it only needs the public API base URL, not
+  AWS credentials. It's tagged `[Trait("Category","Integration")]` and
+  excluded from `ci.yml`'s default `dotnet test` run (that job has no AWS/
+  deploy context) — run it manually with `FULLVIEW_API_BASE_URL` set once
+  Stage 2 is deployed. This mirrors how `cd-infra.yml` already separates
+  AWS-credentialed jobs from the plain `ci.yml` build/test job.
+- **Stage 2 — no auth added to `/sync` yet.** B5's "Auth: single-user v1 —
+  API key in device/web config from SSM" is an architecture-wide note, but
+  Stage 2's own Build bullet doesn't call out adding it, so `/sync` stays
+  open like `/health` for now, same trust model as today. Flagging this to
+  Dan: worth deciding which stage actually wires up the API key check
+  (Stage 6 web app and Stage 7 capture pipeline both eventually need real
+  auth) rather than letting it slide by default.
 
 ## Known issues / blockers
 
@@ -156,16 +228,31 @@ do not redo it when Stage 3 comes up.
 
 - Checkpoint 0.1 confirmed: CI run `29156738756` succeeded on `main`.
   Stage 0 done criteria fully met.
-- Stage 1 code is in place (`Fullview.Infra`, `Fullview.Api/Functions/HealthFunction.cs`,
-  `.github/workflows/cd-infra.yml`) but nothing has been pushed/merged or
-  deployed yet. Blocking on Dan for, in order:
-  - **Checkpoint 1.1** — AWS IAM OIDC provider + `remarkable-fullview-github-deploy`
-    role (trust policy scoped to `repo:danjourno-dev/remarkable-fullview:*`),
-    plus GitHub repo variables `AWS_DEPLOY_ROLE_ARN` and `FULLVIEW_ALERT_EMAIL`,
-    plus the `production` environment with Dan as required reviewer.
-  - **Checkpoint 1.2** — `cdk bootstrap` in Dan's AWS account, region eu-west-2.
-  - **Checkpoint 1.3** — first workflow deploy; Dan approves the environment
-    gate, confirms the stack in the console and `GET /health` returns
-    `{"status":"ok"}`.
-- Once 1.1-1.3 are confirmed, update this file's "Current stage" to Stage 1
-  complete and hand off to Stage 2 (Domain + Sync API).
+- **Checkpoint 1.1 — done.** OIDC provider already existed in the account
+  (from a prior project). Dan created the `remarkable-fullview-github-deploy`
+  role with the correct trust policy via the console; Claude Code (with AWS
+  CLI + `gh` CLI, at Dan's request) attached the least-privilege inline
+  policy (`sts:AssumeRole` on `cdk-hnb659fds-*-255550683596-eu-west-2`),
+  set the `AWS_DEPLOY_ROLE_ARN`/`FULLVIEW_ALERT_EMAIL` repo variables via
+  `gh variable set`, and created the `production` environment with
+  `danjourno-dev` as required reviewer via `gh api`.
+- **Checkpoint 1.2 — done, no action needed.** Account was already
+  bootstrapped (`CDKToolkit` stack `CREATE_COMPLETE`, default qualifier
+  `hnb659fds`, region eu-west-2) from the same prior project. Verified the
+  bootstrap role trust chain (`cdk-hnb659fds-deploy-role-*` trusts the
+  account root) lines up with the deploy role's assume-role policy.
+- First deploy attempt failed: `AWS::Budgets::Budget` rejected
+  `Unit: GBP` (account bills in USD). Fixed to `12 USD` — see Decisions.
+- **Checkpoint 1.3 — done.** Re-deploy succeeded: `fullview-stack` is
+  `CREATE_COMPLETE`. Verified `GET https://vqnmcbnti3.execute-api.eu-west-2.amazonaws.com/health`
+  returns `{"status":"ok"}` (HTTP 200).
+- **Stage 1 done criteria fully met.**
+- **Stage 2 code is written and passes locally (build/test/format/cdk synth)
+  but is not deployed.** Next session: push to `main`, approve the
+  `production` environment gate on `cd-infra.yml` when it runs, confirm
+  `fullview-sync` deployed and the new `gsi1` index is `ACTIVE`, then run
+  `dotnet run --project tools/seed-data` and the
+  `FULLVIEW_API_BASE_URL=... dotnet test --filter Category=Integration`
+  convergence test against the real endpoint to fully close Stage 2's Done
+  criteria. After that, Stage 3 (device hello-world) is next — note
+  Checkpoint 3.1 there is already done (see Decisions/Current stage above).

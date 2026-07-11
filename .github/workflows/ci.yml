@@ -40,5 +40,8 @@ jobs:
       - name: Build
         run: dotnet build Fullview.sln --no-restore --configuration Release
 
+      # Category=Integration tests hit the real deployed /sync endpoint over HTTP and need
+      # FULLVIEW_API_BASE_URL set — this job has no AWS/deploy context, so they're excluded
+      # here and run manually instead (see SyncConvergenceIntegrationTests doc comment).
       - name: Test
-        run: dotnet test Fullview.sln --no-build --configuration Release
+        run: dotnet test Fullview.sln --no-build --configuration Release --filter "Category!=Integration"

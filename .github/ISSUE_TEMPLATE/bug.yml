@@ -1,0 +1,36 @@
+name: Bug report
+description: Something in Anchor isn't working as expected
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect instead?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - device
+        - backend
+        - web
+        - infra
+        - docs
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: Environment / context
+      description: Device OS version, mode (Work/Personal), online or offline, etc.
+    validations:
+      required: false

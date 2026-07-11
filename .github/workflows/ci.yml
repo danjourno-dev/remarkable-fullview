@@ -1,0 +1,44 @@
+# CI for Anchor.
+#
+# Coming from Azure DevOps Pipelines? The mapping is close to 1:1:
+#   ADO `trigger:`                 -> GH `on:` (below)
+#   ADO `pool:`                    -> GH `runs-on:` (per job)
+#   ADO `steps:`                   -> GH `steps:` (same idea, different YAML shape)
+#   ADO task `DotNetCoreCLI@2`     -> GH `run: dotnet ...` shell commands, or a
+#                                      marketplace `uses:` action (e.g. actions/setup-dotnet)
+#   ADO variable groups            -> GH repo Settings -> Secrets and variables
+#   ADO service connections        -> GH OIDC federated identity (see Stage 1 /
+#                                      cd-infra.yml — no long-lived cloud keys here)
+#
+# There's no separate "pipeline definition" step: this file *is* the pipeline,
+# and GitHub picks it up automatically from .github/workflows/ once it's on
+# the default branch.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore
+        run: dotnet restore Anchor.sln
+
+      - name: Check formatting
+        run: dotnet format Anchor.sln --verify-no-changes
+
+      - name: Build
+        run: dotnet build Anchor.sln --no-restore --configuration Release
+
+      - name: Test
+        run: dotnet test Anchor.sln --no-build --configuration Release

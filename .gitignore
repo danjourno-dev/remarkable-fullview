@@ -427,3 +427,9 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# Anchor secrets and machine-local config (never commit these)
+*.local.json
+appsettings.Development.json
+.env
+.env.local

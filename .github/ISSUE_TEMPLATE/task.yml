@@ -1,0 +1,35 @@
+name: Task
+description: A piece of build-plan work, feature, or improvement
+labels: ["task"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: What needs to be done?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - device
+        - backend
+        - web
+        - infra
+        - docs
+    validations:
+      required: true
+  - type: input
+    id: stage
+    attributes:
+      label: Build plan stage
+      description: Which stage in docs/plans/implementation.md does this belong to, if any?
+    validations:
+      required: false
+  - type: textarea
+    id: done
+    attributes:
+      label: Done criteria
+    validations:
+      required: false

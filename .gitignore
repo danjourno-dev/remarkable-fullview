@@ -383,6 +383,10 @@ MSBuild_Logs/
 # AWS SAM Build and Temporary Artifacts folder
 .aws-sam
 
+# CDK synth output and Lambda packaging artifacts
+cdk.out/
+artifacts/
+
 # NVidia Nsight GPU debugger configuration file
 *.nvuser
 

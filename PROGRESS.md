@@ -6,11 +6,12 @@ last session left off.
 
 ## Current stage
 
-**Stage 2 — Domain + Sync API** — deployed (`fullview-sync` Lambda, `gsi1`
-index, `POST /sync` route all live). The Session 5 JSON-casing fix is live
-and confirmed working. A second bug was found during Session 6 re-verification
-(duplicate `entityType` discriminator on outbox writes) — fix is written,
-tested, and formatted locally, but not yet pushed/deployed. See Next up.
+**Stage 2 — Domain + Sync API — done.** Deployed (`fullview-sync` Lambda,
+`gsi1` index, `POST /sync` route all live), both post-deploy bugs (JSON
+casing, duplicate `entityType` discriminator — Sessions 5-6) fixed and
+redeployed. `tools/seed-data` and the `Category=Integration` convergence
+test both pass against the live stack, closing Stage 2's Done criteria.
+Stage 3 is next — see below.
 
 **Stage 3, Checkpoint 3.1 (device prep) is already complete** — done by Dan
 outside any tracked session, ahead of Stage 3 itself. See Decisions below;
@@ -177,9 +178,12 @@ do not redo it when Stage 3 comes up.
   CDK-managed and was left in place, only the item was deleted).
   Post-delete scan confirmed 0 items.
 - Rebuilt, reran the full unit suite (still passes) and `dotnet format` —
-  clean. **Not yet redeployed** — needs another push-to-main + approval
-  cycle, then re-run `tools/seed-data` and the `Category=Integration` test
-  to finally close Stage 2's Done criteria.
+  clean.
+- Deployed. Re-ran `tools/seed-data` against the live stack — seeded 4
+  entities successfully. Re-ran `FULLVIEW_API_BASE_URL=... dotnet test
+  Fullview.sln --filter Category=Integration` against the live stack — the
+  two-fake-clients convergence test passed. **Stage 2's Done criteria are
+  now met.**
 
 ## Decisions
 
@@ -304,13 +308,9 @@ do not redo it when Stage 3 comes up.
   `CREATE_COMPLETE`. Verified `GET https://vqnmcbnti3.execute-api.eu-west-2.amazonaws.com/health`
   returns `{"status":"ok"}` (HTTP 200).
 - **Stage 1 done criteria fully met.**
-- **Stage 2 deployed; Session 5's JSON-casing fix is live and confirmed.**
-  Session 6 found a second bug (duplicate `entityType` discriminator on
-  every entity — see Session 6) blocking real writes; fix is written,
-  tested, and formatted locally but **not yet pushed**. Next session: push
-  the `[JsonIgnore]` entity fix to `main`, approve the `production` gate,
-  then re-run `dotnet run --project tools/seed-data` and
-  `FULLVIEW_API_BASE_URL=... dotnet test --filter Category=Integration`
-  against the live endpoint to confirm the fix and finally close Stage 2's
-  Done criteria. After that, Stage 3 (device hello-world) is next — note
-  Checkpoint 3.1 there is already done (see Decisions/Current stage above).
+- **Stage 2 fully done.** Both post-deploy bugs (Session 5 JSON casing,
+  Session 6 duplicate discriminator) fixed and deployed. Live seed script
+  and `Category=Integration` convergence test both pass against the
+  deployed stack. Next session: start Stage 3 (device hello-world) — note
+  Checkpoint 3.1 there is already done (see Decisions/Current stage above),
+  so work starts from Checkpoint 3.2.

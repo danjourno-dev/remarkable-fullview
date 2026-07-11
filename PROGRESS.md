@@ -6,14 +6,11 @@ last session left off.
 
 ## Current stage
 
-**Stage 2 — Domain + Sync API** — code complete, tested locally, not yet
-deployed. `Fullview.Domain` entities/sync DTOs, `Fullview.Api` `/sync`
-handler, and the CDK changes (new GSI + Lambda + route) are all written,
-build clean, and pass `dotnet format --verify-no-changes` and `cdk synth`.
-**Not yet done:** push to `main` (triggers `cd-infra.yml`, needs Dan's
-`production` environment approval same as Stage 1) and then run the
-HTTP-based convergence integration test against the real deployed `/sync`
-endpoint to fully close out the Done criteria. See Next up.
+**Stage 2 — Domain + Sync API** — deployed (`fullview-sync` Lambda, `gsi1`
+index, `POST /sync` route all live), but a JSON-casing bug found during
+live smoke-testing (see Session 5) needs a second deploy before the Done
+criteria can actually close. Fix is written and passes locally; not yet
+pushed. See Next up.
 
 **Stage 3, Checkpoint 3.1 (device prep) is already complete** — done by Dan
 outside any tracked session, ahead of Stage 3 itself. See Decisions below;
@@ -123,6 +120,28 @@ do not redo it when Stage 3 comes up.
   test drives two fake clients to convergence against deployed stack") is
   written but only exercises the real thing once `FULLVIEW_API_BASE_URL` is
   set and it's run manually — see Decisions.
+
+### 2026-07-11 — Session 5 (Stage 2, post-deploy fix)
+
+- Stage 2 deployed successfully (`fullview-sync` Lambda + `gsi1` index +
+  `POST /sync` route all live; `GET /health` still returns 200).
+- **Found and fixed a real bug while smoke-testing the live endpoint:**
+  `SyncFunction` deserialized the request body with
+  `JsonSerializer.Deserialize<SyncRequest>(request.Body)` (no options) —
+  that's case-sensitive PascalCase-only. A camelCase body (`{"deviceId":...}`,
+  what `tools/seed-data`, any JS web client, and `System.Net.Http.Json`'s own
+  *defaults* all send) failed `DeviceId`'s `required` check and was rejected
+  as 400 "Request body is not valid JSON" — a misleading message, since the
+  JSON was syntactically fine, just case-mismatched. Confirmed via curl:
+  `{"DeviceId":...}` (exact PascalCase) succeeded, `{"deviceId":...}` didn't.
+  Fixed by adding `Fullview.Api.Sync.SyncJson.Options`
+  (`JsonSerializerDefaults.Web` — camelCase + case-insensitive) and using it
+  in both `SyncFunction` (request/response) and `DynamoSyncStore` (the
+  internal `data` blob, for one consistent convention). No existing rows in
+  the table to migrate — nothing had been successfully written yet. Rebuilt,
+  reran the full unit suite (still 8/8) and `dotnet format` — clean. **Not
+  yet redeployed** — this fix needs another push-to-main + approval cycle
+  before the seed script / live integration test will work.
 
 ## Decisions
 
@@ -247,12 +266,11 @@ do not redo it when Stage 3 comes up.
   `CREATE_COMPLETE`. Verified `GET https://vqnmcbnti3.execute-api.eu-west-2.amazonaws.com/health`
   returns `{"status":"ok"}` (HTTP 200).
 - **Stage 1 done criteria fully met.**
-- **Stage 2 code is written and passes locally (build/test/format/cdk synth)
-  but is not deployed.** Next session: push to `main`, approve the
-  `production` environment gate on `cd-infra.yml` when it runs, confirm
-  `fullview-sync` deployed and the new `gsi1` index is `ACTIVE`, then run
-  `dotnet run --project tools/seed-data` and the
+- **Stage 2 deployed, but a JSON-casing bug found during smoke-testing needs
+  a second deploy before Done criteria can close.** See Session 5. Next
+  session: push the `SyncJson`/camelCase fix to `main`, approve the
+  `production` gate, then re-run `dotnet run --project tools/seed-data` and
   `FULLVIEW_API_BASE_URL=... dotnet test --filter Category=Integration`
-  convergence test against the real endpoint to fully close Stage 2's Done
-  criteria. After that, Stage 3 (device hello-world) is next — note
+  against the live endpoint to confirm the fix and finally close Stage 2's
+  Done criteria. After that, Stage 3 (device hello-world) is next — note
   Checkpoint 3.1 there is already done (see Decisions/Current stage above).

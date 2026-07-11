@@ -33,4 +33,15 @@ public class BitmapFontTests
         Assert.Null(exception);
         Assert.Equal(0, image[0, 0].PackedValue);
     }
+
+    [Fact]
+    public void DrawText_FullAlphanumericAndPunctuationSetRendersWithoutFallback()
+    {
+        const string all = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789:.,-/!+'()";
+        using var image = new Image<L8>(BitmapFont.MeasureWidth(all, scale: 1), BitmapFont.GlyphHeight, new L8(255));
+
+        var exception = Record.Exception(() => BitmapFont.DrawText(image, all, 0, 0, scale: 1, color: 0));
+
+        Assert.Null(exception);
+    }
 }

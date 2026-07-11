@@ -172,18 +172,29 @@ public sealed class FramebufferDevice : IDisposable
     /// in the mmap'd frame memory regardless, so a bad refresh call
     /// shouldn't be treated as a fatal error for hello-world purposes.
     /// </summary>
-    public void Refresh(bool fullRefresh = true)
+    public void Refresh(bool fullRefresh = true) =>
+        SendUpdate(0, 0, Width, Height, fullRefresh ? Fb.UpdateModeFull : Fb.UpdateModePartial, Fb.WaveformModeGc16);
+
+    /// <summary>
+    /// Requests a partial e-ink redraw of just <paramref name="region"/>, using the fast
+    /// monochrome (DU) waveform — for tap-to-complete and mode-toggle updates, where
+    /// redrawing the whole panel with GC16 would be needlessly slow.
+    /// </summary>
+    public void RefreshRegion(Rectangle region) =>
+        SendUpdate(region.X, region.Y, region.Width, region.Height, Fb.UpdateModePartial, Fb.WaveformModeDu);
+
+    private void SendUpdate(int x, int y, int width, int height, int updateMode, int waveformMode)
     {
         IntPtr buf = Marshal.AllocHGlobal(Fb.MxcfbUpdateDataSize);
         try
         {
             ZeroMemory(buf, Fb.MxcfbUpdateDataSize);
-            Marshal.WriteInt32(buf, Fb.UpdRegionTopOffset, 0);
-            Marshal.WriteInt32(buf, Fb.UpdRegionLeftOffset, 0);
-            Marshal.WriteInt32(buf, Fb.UpdRegionWidthOffset, Width);
-            Marshal.WriteInt32(buf, Fb.UpdRegionHeightOffset, Height);
-            Marshal.WriteInt32(buf, Fb.WaveformModeOffset, Fb.WaveformModeGc16);
-            Marshal.WriteInt32(buf, Fb.UpdateModeOffset, fullRefresh ? Fb.UpdateModeFull : Fb.UpdateModePartial);
+            Marshal.WriteInt32(buf, Fb.UpdRegionTopOffset, y);
+            Marshal.WriteInt32(buf, Fb.UpdRegionLeftOffset, x);
+            Marshal.WriteInt32(buf, Fb.UpdRegionWidthOffset, width);
+            Marshal.WriteInt32(buf, Fb.UpdRegionHeightOffset, height);
+            Marshal.WriteInt32(buf, Fb.WaveformModeOffset, waveformMode);
+            Marshal.WriteInt32(buf, Fb.UpdateModeOffset, updateMode);
             Marshal.WriteInt32(buf, Fb.UpdateMarkerOffset, 1);
             Marshal.WriteInt32(buf, Fb.TempOffset, Fb.TempUseAmbient);
             Marshal.WriteInt32(buf, Fb.FlagsOffset, 0);

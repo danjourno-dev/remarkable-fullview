@@ -53,6 +53,10 @@ internal static class Fb
     public const int MxcfbUpdateDataSize = 72;
 
     public const int WaveformModeGc16 = 2;
+    // Fast monochrome waveform for partial updates (checkbox ticks, mode badge) — no
+    // grayscale ghosting cleanup, so it's much quicker than GC16 but only looks right for
+    // black/white content, which is all BoardRenderer ever draws.
+    public const int WaveformModeDu = 1;
     public const int UpdateModeFull = 1;
     public const int UpdateModePartial = 0;
     public const int TempUseAmbient = 0x1000;

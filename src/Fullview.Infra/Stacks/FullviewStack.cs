@@ -46,6 +46,17 @@ public sealed class FullviewStack : Stack
             RemovalPolicy = RemovalPolicy.RETAIN
         });
 
+        // Stage 2: delta query for `/sync` reads everything changed since a cursor, ordered
+        // by UpdatedAt (B5). Single-user v1 means gsi1pk is the same constant as pk — this
+        // GSI exists purely to get an UpdatedAt-sorted view, not to shard by user.
+        table.AddGlobalSecondaryIndex(new GlobalSecondaryIndexProps
+        {
+            IndexName = "gsi1",
+            PartitionKey = new DynamoAttribute { Name = "gsi1pk", Type = AttributeType.STRING },
+            SortKey = new DynamoAttribute { Name = "gsi1sk", Type = AttributeType.STRING },
+            ProjectionType = ProjectionType.ALL
+        });
+
         var inboxBucket = new Bucket(this, "InboxBucket", new BucketProps
         {
             BucketName = settings.AwsAccountId is not null
@@ -65,6 +76,23 @@ public sealed class FullviewStack : Stack
             MemorySize = 256,
             Timeout = Duration.Seconds(10)
         });
+
+        // Stage 2: same Fullview.Api package as HealthFunction — only the handler string
+        // and environment differ.
+        var syncFunction = new Function(this, "SyncFunction", new FunctionProps
+        {
+            FunctionName = $"{settings.ResourcePrefix}sync",
+            Runtime = Runtime.DOTNET_8,
+            Handler = "Fullview.Api::Fullview.Api.Functions.SyncFunction::FunctionHandler",
+            Code = Code.FromAsset(ResolveLambdaAsset()),
+            MemorySize = 256,
+            Timeout = Duration.Seconds(10),
+            Environment = new Dictionary<string, string>
+            {
+                ["FULLVIEW_TABLE_NAME"] = table.TableName
+            }
+        });
+        table.GrantReadWriteData(syncFunction);
 
         // L1 (Cfn*) constructs throughout: the .NET binding for the HTTP API L2's Lambda
         // integration helper (Amazon.CDK.AWS.Apigatewayv2.Integrations) never went past a
@@ -91,6 +119,22 @@ public sealed class FullviewStack : Stack
             Target = $"integrations/{healthIntegration.Ref}"
         });
 
+        var syncIntegration = new CfnIntegration(this, "SyncIntegration", new CfnIntegrationProps
+        {
+            ApiId = httpApi.Ref,
+            IntegrationType = "AWS_PROXY",
+            IntegrationUri = syncFunction.FunctionArn,
+            IntegrationMethod = "POST",
+            PayloadFormatVersion = "2.0"
+        });
+
+        _ = new CfnRoute(this, "SyncRoute", new CfnRouteProps
+        {
+            ApiId = httpApi.Ref,
+            RouteKey = "POST /sync",
+            Target = $"integrations/{syncIntegration.Ref}"
+        });
+
         _ = new CfnStage(this, "DefaultStage", new CfnStageProps
         {
             ApiId = httpApi.Ref,
@@ -103,6 +147,13 @@ public sealed class FullviewStack : Stack
             Principal = new Amazon.CDK.AWS.IAM.ServicePrincipal("apigateway.amazonaws.com"),
             Action = "lambda:InvokeFunction",
             SourceArn = $"arn:aws:execute-api:{Region}:{Account}:{httpApi.Ref}/*/*/health"
+        });
+
+        syncFunction.AddPermission("ApiGatewayInvoke", new Permission
+        {
+            Principal = new Amazon.CDK.AWS.IAM.ServicePrincipal("apigateway.amazonaws.com"),
+            Action = "lambda:InvokeFunction",
+            SourceArn = $"arn:aws:execute-api:{Region}:{Account}:{httpApi.Ref}/*/*/sync"
         });
 
         _ = new CfnOutput(this, "HttpApiUrl", new CfnOutputProps
@@ -126,6 +177,22 @@ public sealed class FullviewStack : Stack
             TreatMissingData = TreatMissingData.NOT_BREACHING
         });
         errorAlarm.AddAlarmAction(new SnsAction(alertTopic));
+
+        var syncErrorAlarm = new Alarm(this, "SyncFunctionErrorAlarm", new AlarmProps
+        {
+            AlarmName = $"{settings.ResourcePrefix}sync-errors",
+            AlarmDescription = "Sync Lambda errored — check for a bad mutation or a DynamoDB problem.",
+            Metric = syncFunction.MetricErrors(new MetricOptions
+            {
+                Period = Duration.Minutes(5),
+                Statistic = Stats.SUM
+            }),
+            Threshold = 1,
+            EvaluationPeriods = 1,
+            ComparisonOperator = ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+            TreatMissingData = TreatMissingData.NOT_BREACHING
+        });
+        syncErrorAlarm.AddAlarmAction(new SnsAction(alertTopic));
 
         _ = new CfnBudget(this, "MonthlyBudget", new CfnBudgetProps
         {

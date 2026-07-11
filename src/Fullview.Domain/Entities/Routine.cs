@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Fullview.Domain.Entities;
 
 public enum RoutineType
@@ -10,6 +12,7 @@ public enum RoutineType
 
 public sealed class Routine : SyncEntity
 {
+    [JsonIgnore]
     public override string EntityType => "Routine";
 
     public required string Name { get; set; }

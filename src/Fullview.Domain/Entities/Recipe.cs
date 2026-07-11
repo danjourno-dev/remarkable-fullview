@@ -1,7 +1,10 @@
+using System.Text.Json.Serialization;
+
 namespace Fullview.Domain.Entities;
 
 public sealed class Recipe : SyncEntity
 {
+    [JsonIgnore]
     public override string EntityType => "Recipe";
 
     public required string Title { get; set; }

@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Fullview.Domain.Entities;
 
 public enum MealSlot
@@ -8,6 +10,7 @@ public enum MealSlot
 
 public sealed class Meal : SyncEntity
 {
+    [JsonIgnore]
     public override string EntityType => "Meal";
 
     public required DateOnly Date { get; set; }

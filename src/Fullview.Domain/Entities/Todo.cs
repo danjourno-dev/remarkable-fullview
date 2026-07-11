@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Fullview.Domain.Entities;
 
 public enum TodoPriority
@@ -15,6 +17,7 @@ public enum TodoEnergy
 
 public sealed class Todo : SyncEntity
 {
+    [JsonIgnore]
     public override string EntityType => "Todo";
 
     public required string Title { get; set; }

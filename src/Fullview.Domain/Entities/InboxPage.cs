@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Fullview.Domain.Entities;
 
 public enum InboxPageState
@@ -9,6 +11,7 @@ public enum InboxPageState
 
 public sealed class InboxPage : SyncEntity
 {
+    [JsonIgnore]
     public override string EntityType => "InboxPage";
 
     public InboxPageState State { get; set; } = InboxPageState.Queued;

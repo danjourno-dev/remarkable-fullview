@@ -1,9 +1,18 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <OutputType>Exe</OutputType>
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- `cdk synth` copies Lambda asset sources into cdk.out/, which lives under this
+         project's folder — exclude it or MSBuild's implicit globbing compiles it twice. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);cdk.out/**</DefaultItemExcludes>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Amazon.CDK.Lib" Version="2.261.0" />
+    <PackageReference Include="Constructs" Version="10.6.0" />
+  </ItemGroup>
 
 </Project>

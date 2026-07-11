@@ -40,7 +40,7 @@ public sealed class DynamoSyncStore : ISyncStore
             ["context"] = entity.Context.ToString(),
             ["updatedAt"] = updatedAt,
             ["deleted"] = entity.Deleted,
-            ["data"] = JsonSerializer.Serialize<SyncEntity>(entity),
+            ["data"] = JsonSerializer.Serialize<SyncEntity>(entity, SyncJson.Options),
             ["gsi1pk"] = UserPartition.Pk,
             ["gsi1sk"] = updatedAt
         };
@@ -86,7 +86,7 @@ public sealed class DynamoSyncStore : ISyncStore
     private static SyncEntity Deserialize(Document document)
     {
         var json = document["data"].AsString();
-        return JsonSerializer.Deserialize<SyncEntity>(json)
+        return JsonSerializer.Deserialize<SyncEntity>(json, SyncJson.Options)
             ?? throw new InvalidOperationException($"Stored entity data for sk={document["sk"].AsString()} did not deserialize.");
     }
 }

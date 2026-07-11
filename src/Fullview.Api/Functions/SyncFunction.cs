@@ -30,7 +30,7 @@ public sealed class SyncFunction
         SyncRequest? syncRequest;
         try
         {
-            syncRequest = JsonSerializer.Deserialize<SyncRequest>(request.Body);
+            syncRequest = JsonSerializer.Deserialize<SyncRequest>(request.Body, SyncJson.Options);
         }
         catch (JsonException)
         {
@@ -48,7 +48,7 @@ public sealed class SyncFunction
         {
             StatusCode = 200,
             Headers = new Dictionary<string, string> { ["Content-Type"] = "application/json" },
-            Body = JsonSerializer.Serialize(response)
+            Body = JsonSerializer.Serialize(response, SyncJson.Options)
         };
     }
 
@@ -56,6 +56,6 @@ public sealed class SyncFunction
     {
         StatusCode = 400,
         Headers = new Dictionary<string, string> { ["Content-Type"] = "application/json" },
-        Body = JsonSerializer.Serialize(new { error = message })
+        Body = JsonSerializer.Serialize(new { error = message }, SyncJson.Options)
     };
 }

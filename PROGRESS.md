@@ -20,6 +20,16 @@ device over WiFi: "HELLO DAN" and the border rendered correctly, right way
 up, first try — see "Next up" for the full writeup. Stage 4 (local-first
 device app) is next.
 
+**Stage 4 — Local-first device app — code complete, Checkpoint 4.1 pending.**
+Session 8 built the SQLite store + migrations, all six rendering screens
+with region-map hit-testing, the Now/Next strip's mode toggle, evdev
+tap-to-complete, edge navigation, seed data for both contexts, the
+`Program.cs` main loop, and a systemd unit. All builds/tests/format green
+on the dev machine — **not yet run on the device.** Checkpoint 4.1 ("Dan
+lives with the seeded board for a day") is the human step still needed to
+close Stage 4. Session 9 reworked the UI to match `docs/mockup-v4.png`
+(see below) before that checkpoint runs — still pending.
+
 ## Session log
 
 ### 2026-07-11 — Session 1 (Stage 0)
@@ -231,6 +241,164 @@ device app) is next.
   this proves the fb0/mxcfb code actually works** — that only happens on
   the device itself, which is Checkpoint 3.2, not yet run this session.
 
+### 2026-07-11 — Session 8 (Stage 4, code)
+
+- Extended `src/Fullview.Rendering/BitmapFont.cs`'s glyph set from 8
+  characters to full A-Z, 0-9, and the punctuation the screens actually
+  need (`: . , - / ! + ' ( )`).
+- Added the layout primitive layer under `src/Fullview.Rendering/Layout/`:
+  `BoardAction` (closed hierarchy: `ToggleMode`, `NavigatePrevious/Next`,
+  `ToggleTodo`, `ToggleShoppingItem`, `OpenRecipe`), `HitRegion`,
+  `ScreenRenderResult`, `ScreenKind`, `ScreenSet` (Personal vs Work
+  navigation order + wraparound `Next`/`Previous`), `Canvas` (shared
+  fill-rect/strikethrough helpers), `NowNextStrip`, `Footer`, `ListPage`
+  (pagination), `NowNextCalculator` (pure — merges both contexts' agendas
+  cross-context per B3, picks current/next timed event), `BoardState`
+  (the full per-frame render input, with `WithMode`/`WithScreen`/
+  `WithOpenRecipe` helpers), and `BoardRenderer` (composes strip + body +
+  footer + edge-nav hit zones into one frame).
+- Added the six screens under `src/Fullview.Rendering/Screens/`: Today,
+  Todos, Agenda, Meals, Shopping, Recipe — each a static `Render(...)`
+  returning body-local `ScreenRenderResult`s that `BoardRenderer` offsets
+  into board-global coordinates.
+- Added the device-local SQLite layer under `src/Fullview.Device/Storage/`:
+  `Migrations` (v1: `entities`/`outbox`/`settings` tables), `DeviceDatabase`
+  (owns the connection, applies pending migrations via `PRAGMA
+  user_version`), `DeviceJson` (reuses the exact `JsonSerializerDefaults.Web`
+  convention `Fullview.Api.Sync.SyncJson` uses server-side, so device/server
+  JSON shapes match), `DeviceStore` (`Query<T>`, `Save` — entity row +
+  outbox row in one transaction per B5, `SaveSeed` — entity row only,
+  `ToggleTodoCompleted`, `ToggleShoppingItemChecked`), and `DeviceSettings`
+  (device-local current-mode setting, defaults to Personal).
+- Added `src/Fullview.Device/Storage/SeedData.cs`: fabricated demo data for
+  both contexts (todos, agenda events, meals, shopping items, one recipe),
+  applied only when the store is empty so it never clobbers real data.
+- Added touch input under `src/Fullview.Device/Input/`: `RawInputEvent` +
+  `EvCodes` (decoded evdev event + the type/code constants this app reads),
+  `TouchTapDetector` (pure, clock-free — uses each event's own kernel
+  timestamp, not wall-clock, so it's testable from a canned sequence; a tap
+  is ABS_MT_TRACKING_ID assigned-then-cleared within 400ms and 40 touch-units
+  of movement) and `EvdevTouchDevice` (P/Invoke read loop over
+  `/dev/input/eventN`, hardware only). Originally built against BTN_TOUCH per
+  Dan's steer toward simple single-touch polling, but Checkpoint 4.1 on real
+  hardware showed `cyttsp5_mt` reports `KEY=0` — no EV_KEY codes at all, so
+  BTN_TOUCH never fires. Switched down/up detection to ABS_MT_TRACKING_ID
+  (still only last-known ABS_MT_POSITION_X/Y, no full multi-slot tracking).
+- Extended `FramebufferDevice`: `Refresh(bool)` now delegates to a shared
+  `SendUpdate`, and a new `RefreshRegion(Rectangle)` does a partial update
+  with the fast monochrome (DU) waveform — used for tap-to-complete/
+  mode-toggle instead of the slower full-panel GC16 refresh.
+- Wired `src/Fullview.Device/Program.cs`: opens the DB (seeding if empty)
+  and the framebuffer, renders the initial board with a full refresh, then
+  loops reading touch events, hit-testing taps against the last render's
+  regions, applying the resulting `BoardAction` to the store/state, and
+  doing a targeted `RefreshRegion` (the tapped hit region for todo/shopping
+  toggles, the whole panel for mode/navigation/recipe changes, since those
+  redraw the whole body).
+- Added `tools/device/fullview-device.service` (systemd unit, runs the
+  binary from `/home/root`, `Restart=on-failure`) and
+  `docs/device-setup.md` (build/deploy/systemd-install steps and the two
+  runtime env vars, `FULLVIEW_DB_PATH`/`FULLVIEW_TOUCH_DEVICE`, written for
+  a stranger forking the repo).
+- Tests: 13 new `Fullview.Rendering.Tests` (ScreenSet, NowNextCalculator,
+  BoardRenderer) + 1 BitmapFont full-charset test (20 total, all pass); 11
+  new `Fullview.Device.Tests` (DeviceStore, DeviceSettings) + 6
+  `TouchTapDetectorTests` (17 total, all pass). Full solution: `dotnet
+  build`/`dotnet test`/`dotnet format --verify-no-changes` all green.
+  **None of this proves the device-side code (SQLite on the real
+  filesystem, the touch device path, partial e-ink refresh) works on
+  hardware** — that's Checkpoint 4.1, not yet run.
+
+### 2026-07-11 — Session 9 (Stage 4, UI rework to mockup v4)
+
+- Dan saved `docs/mockup-v4.png` and asked for two things: (1) drop the
+  tappable PERSONAL/WORK badge in favor of the reMarkable 1's physical
+  bottom-right hardware button for mode switching, with the footer's old
+  "not yet synced" text replaced by a hint that explains the button; (2)
+  make the whole board match the mockup's look. Confirmed scope with Dan
+  before starting — the mockup implies a full visual redesign (new title
+  header, double-ruled boxes everywhere, a 4-panel Today dashboard, and
+  Work-mode-only "WAITING ON"/"SHUTDOWN" panels), not just the footer.
+- **Header (new):** `src/Fullview.Rendering/Layout/Header.cs` — a title bar
+  above the strip on every screen: "LIFE OPS"/"WORK OPS" + a date/inbox
+  subtitle, double-ruled box.
+- **Canvas.DrawFrame (new):** the mockup's double-ruled box style (outer
+  border, inset second border) used by Header, NowNextStrip, Footer, and
+  every Today panel — one shared primitive instead of each component
+  drawing its own border.
+- **NowNextStrip:** dropped the PERSONAL/WORK label it used to draw at its
+  own top-right (mockup v4 doesn't show a mode badge in the strip at all —
+  mode now only appears in Header/Footer); wrapped in `Canvas.DrawFrame`;
+  `Draw` now takes an `originY` so it can sit below Header instead of
+  always starting at row 0.
+- **Footer:** removed the tappable PERSONAL/WORK badge and its `ToggleMode`
+  hit region entirely — `Footer.Draw` no longer returns a `HitRegion`.
+  Replaced the screen-name-left/sync-status-right layout with
+  `INBOX: <status> // HW BUTTON = SWITCH MODE` on the left and the plain
+  (non-tappable) mode name on the right, wrapped in `Canvas.DrawFrame`.
+  Removed `BoardState.SyncStatus` — the literal "not yet synced" string it
+  held is gone, nothing renders it now (Stage 5's real sync engine can add
+  a real status surface back later if needed).
+- **TodayScreen — rewritten as a 4-panel dashboard** (was a single-column
+  agenda/focus-todos/one-line-summary list): 2x2 double-ruled panels —
+  Agenda + (Meals in Personal / Waiting On in Work) on top, Reminders +
+  (Shopping in Personal / Shutdown in Work) on the bottom. Every panel ends
+  in a `[ TAP TO OPEN ]` hit region (new `BoardAction.NavigateToScreen`)
+  that jumps straight to the matching full screen, the same way `OpenRecipe`
+  already bypasses `ScreenSet`'s nav order. Todo-backed panels
+  (Reminders/Waiting On/Shutdown) also get a per-row `ToggleTodo` hit region
+  above the hint line, reusing `TodosScreen`'s tap-to-complete pattern.
+- **Reminders panel is cross-context**, like `NowNextStrip`'s Now/Next: it
+  shows WORK and PERSONAL subsections regardless of the board's current
+  mode, sourced from `BoardState.Todos` (the full unfiltered snapshot)
+  rather than the mode-filtered list `BoardRenderer` normally hands to
+  screens.
+- **Asked Dan how to source Waiting On / Shutdown**, since the mockup's
+  content for those two (owner-tagged blocked items; a routine-style
+  shutdown checklist) doesn't map to any entity that exists yet — and
+  `ScreenKind.cs` explicitly defers Routine/RoutineCheck to Stage 8
+  ("Routines are v1.5 ... have no screen yet"). Dan chose: repurpose
+  Todos rather than pull Routine forward or ship empty placeholders.
+  **Waiting On** = incomplete Work todos with `Priority == Focus`.
+  **Shutdown** = incomplete Work todos with any other priority. No owner
+  tags (Todo has no such field) — revisit if/when Stage 8 gives these
+  panels real backing entities.
+- **Hardware button wiring:** renamed `EvdevTouchDevice` →
+  `Fullview.Device.Input.EvdevDevice` (it was already a generic
+  raw-input-event reader, not touch-specific — the old name just predated
+  a second use). Added `EvCodes.EV_KEY`/`KEY_RIGHT` and
+  `Evdev.DefaultButtonDevicePath` (`/dev/input/event1`, the same gpio-keys
+  node Session 8 already identified for the physical buttons — see Known
+  issues there). **`KEY_RIGHT` = 106 is the standard
+  linux/input-event-codes.h value and is unverified on real hardware** —
+  same caveat class as the Session 7 mxcfb ioctl constant; if the button
+  doesn't switch mode at Checkpoint 4.1, check the real code with `evtest`
+  and fix `RawInputEvent.cs` (documented in `docs/device-setup.md`).
+- **`Program.cs` restructured from one blocking read loop to two producer
+  threads + one consumer.** Reading both the touch device and the button
+  device requires two concurrent blocking `read()`s; a background thread
+  per device now decodes raw events and pushes a small `DeviceInput`
+  (tap-with-coordinates, or a bare hardware-button marker) onto a shared
+  `BlockingCollection`. The main thread is the sole consumer — it's still
+  the only place `BoardState`/`lastRender` mutate, so no locking needed
+  there. Hardware-button inputs skip hit-testing and dispatch
+  `BoardAction.ToggleMode` directly; tap inputs hit-test against
+  `lastRender.Regions` exactly as before.
+- Verified locally: `dotnet build`, `dotnet test --filter
+  "Category!=Integration"`, and `dotnet format --verify-no-changes` all
+  pass. Updated `BoardRendererTests` (dropped `SyncStatus` from the test
+  fixture, replaced the old "mode badge exists" assertion with one
+  confirming no tap target exists for `ToggleMode`, added a test that
+  Today's panels carry `NavigateToScreen` hits) and
+  `docs/device-setup.md` (new `FULLVIEW_BUTTON_DEVICE` env var, `evtest`
+  troubleshooting note for the unverified key code).
+- **Not verified on real hardware yet** — this rides on top of Stage 4's
+  existing not-yet-verified-on-device state, plus two brand-new unknowns:
+  whether `KEY_RIGHT` is actually what the right-hand button reports, and
+  whether reading two evdev devices concurrently from background threads
+  behaves as expected on the device's kernel/libc. Both need Checkpoint
+  4.1.
+
 ## Decisions
 
 - **Repo name:** using `remarkable-fullview` (already existed with origin
@@ -355,11 +523,43 @@ device app) is next.
   `DEVICE_PATH` as env vars (defaulting to the reMarkable's well-known
   USB IP `10.11.99.1` and user `root`, which aren't secrets), matching how
   `tools/seed-data` already avoids committing Dan-specific config.
+- **Stage 4 — kept the hand-authored bitmap font rather than switching to
+  a real typeface as Session 7's decision suggested.** Extending the
+  existing 5x7 font to the full alphanumeric+punctuation set the six
+  screens need was a small, contained change with no new dependency or
+  licensing question; revisit if Checkpoint 4.1 feedback says legibility
+  is a real problem, not before.
+- **Stage 4 — outbox built now, not deferred to Stage 5.** B5 frames
+  "outbox row in the same transaction as every local write" as a
+  whole-app invariant, not something scoped to Stage 5's Build bullet
+  (which only owns drain/connectivity/retry). `DeviceStore.Save` writes
+  both rows transactionally today; `SaveSeed` deliberately skips the
+  outbox since seed rows aren't real mutations to sync.
+- **Stage 4 — DB path and touch device path are env-var overridable, not
+  hardcoded.** `FULLVIEW_DB_PATH` defaults to a file next to the binary
+  (`AppContext.BaseDirectory`); `FULLVIEW_TOUCH_DEVICE` defaults to
+  `/dev/input/event2`. Both can be overridden without a rebuild if
+  Checkpoint 4.1 finds the defaults wrong — see Known issues below for
+  the touch device path specifically.
+- **Stage 4 — partial refresh uses the DU waveform, full refresh keeps
+  GC16.** `FramebufferDevice.RefreshRegion` is for tap-to-complete/
+  mode-toggle: fast, monochrome-only, no grayscale ghost cleanup — fine
+  since `BoardRenderer` only ever draws black/white. The original
+  `Refresh(fullRefresh: true)` path (GC16, full panel) is unchanged for
+  the initial boot render.
 
 ## Known issues / blockers
 
-- None currently. The `Dan-613` keyring account shown by `gh auth status`
-  is stale/inactive and harmless — the active account is `danjourno-dev`.
+- **Stage 4 — resolved: touch device path was wrong, now confirmed.**
+  Checkpoint 4.1 on real hardware showed taps not registering.
+  `cat /proc/bus/input/devices` revealed `/dev/input/event1` is
+  `gpio-keys` (the physical side buttons), not the touchscreen; the
+  capacitive touch controller (`cyttsp5_mt`) is `/dev/input/event2`.
+  Updated the default in `Evdev.cs` and docs/device-setup.md
+  accordingly. Still overridable via `FULLVIEW_TOUCH_DEVICE` if a
+  different unit reports a different `eventN`.
+- The `Dan-613` keyring account shown by `gh auth status` is
+  stale/inactive and harmless — the active account is `danjourno-dev`.
 
 ## Next up
 
@@ -408,3 +608,24 @@ device app) is next.
   script repeatable" — both true). **Stage 3 is complete.** Next session:
   start Stage 4 (local-first device app — SQLite store, region-map
   screens, mode badge, tap-to-complete, systemd unit).
+- **Stage 4 code complete this session (Session 8) — all Build bullets
+  done, all tests/build/format green on the dev machine, nothing yet
+  verified on the device.** Remaining before Stage 4 is genuinely closed:
+  **Checkpoint 4.1** — deploy to the device (`tools/device/publish-arm.sh`
+  + `tools/device/deploy-over-ssh.sh`, then install
+  `tools/device/fullview-device.service` per docs/device-setup.md), confirm
+  the seeded board renders correctly, confirm taps register (touch device
+  path may need overriding — see Known issues), and Dan lives with it for
+  a day before filing layout/type-size feedback as GitHub Issues. Once
+  that's done, Stage 4's Done criteria ("fully offline interactive
+  dashboard on device") is fully met and Stage 5 (device sync engine) is
+  next.
+- **Session 9 reworked the UI to match `docs/mockup-v4.png`** (new Header
+  bar, double-ruled panels, 4-panel Today dashboard, hardware-button mode
+  switch — see Session 9 log and Decisions) before Checkpoint 4.1 runs.
+  All still-open Checkpoint 4.1 items above apply, plus two new unknowns
+  this session added: whether `EvCodes.KEY_RIGHT` (106) is really what the
+  right-hand physical button reports on `/dev/input/event1`, and whether
+  the touch+button dual-thread evdev read loop behaves correctly on
+  device. If the button doesn't switch mode, see the `evtest`
+  troubleshooting note in `docs/device-setup.md`.

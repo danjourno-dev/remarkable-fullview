@@ -1,0 +1,15 @@
+[Unit]
+Description=Fullview device board
+After=multi-user.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/root/fullview-device-dir
+ExecStart=/home/root/fullview-device-dir/Fullview.Device
+Restart=on-failure
+RestartSec=5
+# The touch and framebuffer devices are only usable by root on stock rM1 firmware.
+User=root
+
+[Install]
+WantedBy=multi-user.target

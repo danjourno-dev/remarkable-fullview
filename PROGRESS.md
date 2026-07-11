@@ -11,11 +11,14 @@ last session left off.
 casing, duplicate `entityType` discriminator — Sessions 5-6) fixed and
 redeployed. `tools/seed-data` and the `Category=Integration` convergence
 test both pass against the live stack, closing Stage 2's Done criteria.
-Stage 3 is next — see below.
 
-**Stage 3, Checkpoint 3.1 (device prep) is already complete** — done by Dan
-outside any tracked session, ahead of Stage 3 itself. See Decisions below;
-do not redo it when Stage 3 comes up.
+**Stage 3 — Device hello-world — done.** Checkpoint 3.1 (device prep:
+Vellum, AppLoad) was already done by Dan ahead of Stage 3. Session 7 built
+the fb0/mxcfb P/Invoke blitter, the hello-world ImageSharp render, and the
+publish/deploy scripts. Checkpoint 3.2 confirmed it works on the real
+device over WiFi: "HELLO DAN" and the border rendered correctly, right way
+up, first try — see "Next up" for the full writeup. Stage 4 (local-first
+device app) is next.
 
 ## Session log
 
@@ -185,6 +188,49 @@ do not redo it when Stage 3 comes up.
   two-fake-clients convergence test passed. **Stage 2's Done criteria are
   now met.**
 
+### 2026-07-11 — Session 7 (Stage 3, code)
+
+- Built the fb0/mxcfb P/Invoke layer: `src/Fullview.Device/Native/Fb.cs`
+  (open/close/mmap/munmap/ioctl bindings, ioctl request numbers, struct
+  byte offsets) and `src/Fullview.Device/FramebufferDevice.cs` (queries
+  real geometry via `FBIOGET_VSCREENINFO`/`FBIOGET_FSCREENINFO` instead of
+  hardcoding 1404x1872, mmaps `smem_len` bytes, writes an `Image<L8>` as
+  either RGB565 (16bpp, the rM1's expected mode) or packed 8bpp grayscale,
+  and drives `MXCFB_SEND_UPDATE` for the e-ink redraw).
+- Added `src/Fullview.Rendering/BitmapFont.cs` + `HelloWorldScreen.cs`: a
+  hand-authored 5x7 block font (no external TTF, so no font-licensing
+  question for a public repo) rendering "HELLO DAN" centered inside a
+  black border, sized to whatever framebuffer geometry is passed in.
+- Added `SixLabors.ImageSharp` (3.1.12 — bumped from the first-tried 3.1.5
+  after `dotnet build` flagged two known advisories on 3.1.5; 3.1.12 was
+  already in the local NuGet cache and clean) as `Fullview.Rendering`'s
+  only new dependency.
+- Wired `src/Fullview.Device/Program.cs`: opens the framebuffer, renders
+  hello-world at the device's actual reported geometry, writes it, requests
+  a full refresh, then stays alive 60s (Ctrl+C to exit early) so Checkpoint
+  3.2 has a window to inspect `ps`/`free` before the process exits.
+- Added `tools/device/publish-arm.sh` (self-contained linux-arm publish to
+  `artifacts/device/`, gitignored) and `tools/device/deploy-over-ssh.sh`
+  (scp + remote chmod/run, host/user/path all env-var configurable,
+  defaulting to the reMarkable's standard USB IP `10.11.99.1` and user
+  `root` — no device specifics committed).
+- Tests: `tests/Fullview.Rendering.Tests` gained `HelloWorldScreenTests`
+  and `BitmapFontTests` (pure ImageSharp, run on any OS/CI).
+  `tests/Fullview.Device.Tests` gained `MxcfbIoctlNumberTests`, which
+  re-derives `MXCFB_SEND_UPDATE` from the standard Linux `_IOW` macro and
+  asserts it matches the hardcoded constant in `Fb.cs` — this is the one
+  piece of the P/Invoke layer that's checkable without real hardware.
+  Added `InternalsVisibleTo` on `Fullview.Device` so the test can see
+  `Native.Fb`.
+- Verified on the dev machine (Windows): `dotnet build Fullview.sln` (0
+  warnings), `dotnet format Fullview.sln --verify-no-changes` (clean),
+  `dotnet test Fullview.sln --filter "Category!=Integration"` (all pass:
+  3 Domain + 6 Rendering + 5 Api + 1 Device), and
+  `bash tools/device/publish-arm.sh` (produces a self-contained ~63MB
+  32-bit ARM ELF binary at `artifacts/device/Fullview.Device`). **None of
+  this proves the fb0/mxcfb code actually works** — that only happens on
+  the device itself, which is Checkpoint 3.2, not yet run this session.
+
 ## Decisions
 
 - **Repo name:** using `remarkable-fullview` (already existed with origin
@@ -279,6 +325,36 @@ do not redo it when Stage 3 comes up.
   Dan: worth deciding which stage actually wires up the API key check
   (Stage 6 web app and Stage 7 capture pipeline both eventually need real
   auth) rather than letting it slide by default.
+- **Stage 3 — framebuffer geometry is queried at runtime, not hardcoded.**
+  `FramebufferDevice.Open()` calls `FBIOGET_VSCREENINFO`/`FBIOGET_FSCREENINFO`
+  rather than assuming the known 1404x1872/16bpp numbers, so a wrong
+  assumption fails loudly (`IOException`) instead of silently mis-rendering.
+  Struct offsets are for **armhf (32-bit `unsigned long`)** specifically —
+  this code will never run anywhere else, so no cross-arch handling was
+  added.
+- **Stage 3 — `MXCFB_SEND_UPDATE` = `0x4048462e`, the EPDC v2
+  `mxcfb_update_data` layout (72 bytes: adds `dither_mode`/`quant_bit`
+  before `alt_buffer_data`), matching libremarkable and the rest of the rM
+  homebrew ecosystem, per the plan's "reference libremarkable struct
+  layout" instruction. `tests/Fullview.Device.Tests/MxcfbIoctlNumberTests`
+  re-derives this from the `_IOW` macro so the constant isn't just a magic
+  number pasted from a comment. **This is unverified on real hardware
+  until Checkpoint 3.2** — if the ioctl fails there, `FramebufferDevice`
+  is written to log the errno rather than throw (pixels are still in the
+  mmap'd frame either way), so a wrong refresh call won't crash the
+  process, but it does mean "process ran without error" isn't sufficient
+  proof — Dan needs to actually look at the screen.
+- **Stage 3 — no font asset shipped; hand-authored 5x7 bitmap font
+  instead.** Avoids a font-licensing question in a public repo and a
+  dependency on `SixLabors.Fonts` for what's a one-off derisking screen.
+  Stage 4's real screens ("Fullview.Rendering screens... region-map
+  hit-testing") will need actual typography and should pick a proper
+  open-license font then, not reuse this.
+- **Stage 3 — device deploy config is env vars, not a committed file.**
+  `tools/device/deploy-over-ssh.sh` takes `DEVICE_HOST`/`DEVICE_USER`/
+  `DEVICE_PATH` as env vars (defaulting to the reMarkable's well-known
+  USB IP `10.11.99.1` and user `root`, which aren't secrets), matching how
+  `tools/seed-data` already avoids committing Dan-specific config.
 
 ## Known issues / blockers
 
@@ -311,6 +387,24 @@ do not redo it when Stage 3 comes up.
 - **Stage 2 fully done.** Both post-deploy bugs (Session 5 JSON casing,
   Session 6 duplicate discriminator) fixed and deployed. Live seed script
   and `Category=Integration` convergence test both pass against the
-  deployed stack. Next session: start Stage 3 (device hello-world) — note
-  Checkpoint 3.1 there is already done (see Decisions/Current stage above),
-  so work starts from Checkpoint 3.2.
+  deployed stack.
+- **Checkpoint 3.2 — done.** Dan ran `tools/device/publish-arm.sh` then
+  `tools/device/deploy-over-ssh.sh` (over WiFi, `DEVICE_HOST=192.168.178.48`
+  via Git Bash directly — `bash` on PATH in a plain PowerShell prompt
+  resolves to the WSL launcher, not Git Bash, and has no distro installed;
+  invoking `"C:\Program Files\Git\bin\bash.exe"` explicitly sidesteps
+  that). Confirmed on the actual device: **"HELLO DAN" rendered correctly
+  — right-side up, not mirrored/rotated — and the black border showed on
+  all four edges.** So both the fb0 mmap write path and the
+  `MXCFB_SEND_UPDATE` ioctl (the two big unknowns from Session 7) work as
+  written, first try, no rotation-handling needed after all.
+  **RSS/`free` not captured** — the first attempt raced the 60s window
+  (the `ps` ran before the app had started) and Dan didn't re-run a second
+  time. Not worth chasing now: Stage 4 makes this a long-running systemd
+  service, which is a far easier target to measure RSS against than a
+  one-shot 60s process. Revisit there if memory footprint becomes a real
+  question.
+- **Stage 3 Done criteria met** ("pixels on e-ink from our binary, deploy
+  script repeatable" — both true). **Stage 3 is complete.** Next session:
+  start Stage 4 (local-first device app — SQLite store, region-map
+  screens, mode badge, tap-to-complete, systemd unit).

@@ -72,6 +72,3 @@ No secrets or live endpoints live in this repository. See `SECURITY.md`
 (added later in the build) for the full isolation guarantees and how to
 report a vulnerability.
 
-## License
-
-[MIT](LICENSE)

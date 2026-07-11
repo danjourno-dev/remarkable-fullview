@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Fullview.Domain.Entities;
 
 /// <summary>One day's tick state for one item of a <see cref="Routine"/>'s checklist.
@@ -5,6 +7,7 @@ namespace Fullview.Domain.Entities;
 /// rather than living on the Routine itself.</summary>
 public sealed class RoutineCheck : SyncEntity
 {
+    [JsonIgnore]
     public override string EntityType => "RoutineCheck";
 
     public required string RoutineId { get; set; }

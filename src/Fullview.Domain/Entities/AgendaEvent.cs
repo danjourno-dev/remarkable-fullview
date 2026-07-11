@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Fullview.Domain.Entities;
 
 /// <summary>Where an agenda event came from (B5). <see cref="GoogleCalendar"/> events are
@@ -11,6 +13,7 @@ public enum AgendaEventSource
 
 public sealed class AgendaEvent : SyncEntity
 {
+    [JsonIgnore]
     public override string EntityType => "AgendaEvent";
 
     public required string Title { get; set; }

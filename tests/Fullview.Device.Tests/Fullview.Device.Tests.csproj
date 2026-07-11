@@ -21,7 +21,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Anchor.Api\Anchor.Api.csproj" />
+    <ProjectReference Include="..\..\src\Fullview.Device\Fullview.Device.csproj" />
   </ItemGroup>
 
 </Project>

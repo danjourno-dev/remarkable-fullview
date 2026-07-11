@@ -1,8 +1,8 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
-    <ProjectReference Include="..\Anchor.Domain\Anchor.Domain.csproj" />
-    <ProjectReference Include="..\Anchor.Rendering\Anchor.Rendering.csproj" />
+    <ProjectReference Include="..\Fullview.Domain\Fullview.Domain.csproj" />
+    <ProjectReference Include="..\Fullview.Rendering\Fullview.Rendering.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

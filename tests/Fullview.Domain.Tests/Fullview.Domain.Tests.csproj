@@ -21,7 +21,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Anchor.Domain\Anchor.Domain.csproj" />
+    <ProjectReference Include="..\..\src\Fullview.Domain\Fullview.Domain.csproj" />
   </ItemGroup>
 
 </Project>

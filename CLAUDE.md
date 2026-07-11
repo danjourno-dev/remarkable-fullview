@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Project ANCHOR — a reMarkable 1 executive-function assistant. Full product
+Project remarkable-fullview — a reMarkable 1 executive-function assistant. Full product
 design and staged build plan: `docs/plans/implementation.md`. Session state
 and decisions log: `PROGRESS.md`.
 
@@ -25,17 +25,17 @@ This is a public open-source repo.
 
 ```
 /src
-  Anchor.Domain          shared entities + sync metadata (netstandard-safe)
-  Anchor.Rendering        ImageSharp screen renderer (shared device/server)
-  Anchor.Api              Lambda handlers (sync, capture, auth)
-  Anchor.Infra             CDK app (DynamoDB, API GW, Lambdas, S3, budgets/alarms)
-  Anchor.Device            rM1 app (fb0 blitter, evdev input, SQLite, sync engine)
-  Anchor.Web               React SPA (capture + management + needs-review)
+  Fullview.Domain          shared entities + sync metadata (netstandard-safe)
+  Fullview.Rendering        ImageSharp screen renderer (shared device/server)
+  Fullview.Api              Lambda handlers (sync, capture, auth)
+  Fullview.Infra             CDK app (DynamoDB, API GW, Lambdas, S3, budgets/alarms)
+  Fullview.Device            rM1 app (fb0 blitter, evdev input, SQLite, sync engine)
+  Fullview.Web               React SPA (capture + management + needs-review)
 /tests                     mirrors src, one *.Tests project per testable src project
 /docs                      the plan, runbooks, device setup notes
 ```
 
-Single solution: `Anchor.sln` (classic `.sln` format, not `.slnx` — CI pins
+Single solution: `Fullview.sln` (classic `.sln` format, not `.slnx` — CI pins
 the 8.0.x SDK via `actions/setup-dotnet@v4`).
 
 ## Conventions
@@ -50,9 +50,9 @@ the 8.0.x SDK via `actions/setup-dotnet@v4`).
 ## Build / test commands
 
 ```
-dotnet build Anchor.sln
-dotnet test Anchor.sln
-dotnet format Anchor.sln --verify-no-changes
+dotnet build Fullview.sln
+dotnet test Fullview.sln
+dotnet format Fullview.sln --verify-no-changes
 ```
 
 These three commands are exactly what CI runs (`.github/workflows/ci.yml`).

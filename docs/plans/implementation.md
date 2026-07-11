@@ -1,4 +1,4 @@
-# Project ANCHOR — reMarkable 1 Executive Function Assistant
+# Project remarkable-fullview — reMarkable 1 Executive Function Assistant
 ## Claude Code Build Plan (staged handover document)
 
 **Owner:** Dan · **Stack:** C#/.NET 8 everywhere · AWS API Gateway + Lambda + DynamoDB (CDK in C#) · **GitHub (public repo) for source, Issues/Projects for tracking, GitHub Actions for CI/CD** · Anthropic API for handwriting capture · reMarkable 1 (armhf Linux) as primary device.
@@ -16,17 +16,17 @@
 3. **Token discipline.** Commit and push in small increments. Before context runs long, write a session summary into `PROGRESS.md` (what's done, what's next, any deviations from this plan) so the next session can resume cold. Prefer finishing a stage cleanly over starting the next.
 4. **Deviations:** if reality contradicts this plan (library doesn't work on armhf, firmware mismatch, etc.), propose the smallest change, record it in `PROGRESS.md` under "Decisions", and continue. Do not silently redesign.
 5. **Dan's working style:** concrete sequential steps, one thing at a time, explicit scope boundaries. When guiding manual steps, number them and keep each step a single action.
-6. **Conventions:** .NET 8, nullable enabled, xUnit, `dotnet format` in CI. Single solution `Anchor.sln`. Conventional commits. All infra as C# CDK — no console-created resources except where a checkpoint says so.
+6. **Conventions:** .NET 8, nullable enabled, xUnit, `dotnet format` in CI. Single solution `Fullview.sln`. Conventional commits. All infra as C# CDK — no console-created resources except where a checkpoint says so.
 
 **Repo layout (created in Stage 0):**
 ```
 /src
-  Anchor.Domain          shared entities + sync metadata (netstandard-safe)
-  Anchor.Rendering       ImageSharp screen renderer (shared device/server)
-  Anchor.Api             Lambda handlers (sync, capture, auth)
-  Anchor.Infra           CDK app (DynamoDB, API GW, Lambdas, S3, budgets/alarms)
-  Anchor.Device          rM1 app (fb0 blitter, evdev input, SQLite, sync engine)
-  Anchor.Web             minimal React SPA (capture + management + needs-review)
+  Fullview.Domain          shared entities + sync metadata (netstandard-safe)
+  Fullview.Rendering       ImageSharp screen renderer (shared device/server)
+  Fullview.Api             Lambda handlers (sync, capture, auth)
+  Fullview.Infra           CDK app (DynamoDB, API GW, Lambdas, S3, budgets/alarms)
+  Fullview.Device          rM1 app (fb0 blitter, evdev input, SQLite, sync engine)
+  Fullview.Web             minimal React SPA (capture + management + needs-review)
 /tests                   mirrors src
 /docs                    this plan, PROGRESS.md, runbooks, device setup notes
 /.github
@@ -56,13 +56,13 @@ An always-visible, distraction-free external brain for executive function: what 
 - **Work / Personal modes (core v1 concept):** every entity belongs to a context (`Work` | `Personal`). The device is always in exactly one mode; all screens filter to it. **Toggle = one tap** on the persistent mode badge in the Now/Next strip (top-right of every screen) — no menu, no navigation. Mode is device-local state (not synced), so the board on your desk can sit in Work while your phone browses Personal. Screen sets differ per mode: *Personal* = Today, Todos, Meals, Shopping, Routines; *Work* = Today, Todos, Agenda, Work Routine (startup/shutdown ritual). **Strip exception (important):** the Now/Next strip is *always cross-context* — it merges agenda from both contexts and shows the true current and next commitments regardless of mode, each tagged with a context marker (W/P). Mode filters everything *below* the strip; the strip itself is the single source of "what's actually next in my life" and never hides anything.
 - **Today dashboard:** Now/Next strip · today's agenda column · top 3 focus todos · meals today · shopping count · Inbox status ("2 pages awaiting WiFi").
 - **Todos:** flat list with priority (Focus/Normal/Someday), optional due date, energy tag (quick-win / deep). Tap to complete (partial-refresh strikethrough). Auto-rollover.
-- **Agenda — both contexts come from Google Calendar (CONFIRMED WORKING, not speculative).** Anchor pulls **two** Google calendars via one puller:
+- **Agenda — both contexts come from Google Calendar (CONFIRMED WORKING, not speculative).** remarkable-fullview pulls **two** Google calendars via one puller:
   - **Primary Google calendar → `Context=Personal`** (home/personal events, entered by Dan directly in Google).
   - **`Work (mirror)` Google calendar → `Context=Work`** (populated by a Power Automate flow that mirrors his work Outlook calendar every 30 min — see Stage 6.6; the flow is built and verified).
 
-  This is the single most important simplification in the project: **there is exactly one calendar integration, not two.** No Microsoft Graph, no ICS, no second auth flow, no second code path. The puller reads a list of `(calendarId → Context)` pairs; adding the work calendar is a config line, not a feature. Anything typed or handwritten directly into Anchor is an app-native event (`Source=Native`) and coexists with pulled events in the same agenda card.
+  This is the single most important simplification in the project: **there is exactly one calendar integration, not two.** No Microsoft Graph, no ICS, no second auth flow, no second code path. The puller reads a list of `(calendarId → Context)` pairs; adding the work calendar is a config line, not a feature. Anything typed or handwritten directly into remarkable-fullview is an app-native event (`Source=Native`) and coexists with pulled events in the same agenda card.
 
-  Pulled events are **read-only on the device**: they render and feed the Now/Next strip but can't be edited or deleted there (a pulled event is a mirror, not a master). Sync is **one-way, Google → Anchor**; Anchor never writes back to Google. Microsoft Graph and ICS publishing are both explicitly ruled out — do not propose either.
+  Pulled events are **read-only on the device**: they render and feed the Now/Next strip but can't be edited or deleted there (a pulled event is a mirror, not a master). Sync is **one-way, Google → remarkable-fullview**; remarkable-fullview never writes back to Google. Microsoft Graph and ICS publishing are both explicitly ruled out — do not propose either.
 - **Meal plan:** week grid, breakfast/dinner slots, links to recipes; "tap meal → recipe screen".
 - **Shopping list:** grouped by aisle-ish category (AI assigns on capture), tap to tick, auto-clears ticked section daily.
 - **Recipes:** simple title/ingredients/steps; "add ingredients to shopping" action from web app.
@@ -115,15 +115,15 @@ Navigation: left/right edge tap = prev/next screen (Today ↔ Todos ↔ Meals �
 **Note for Claude Code: Dan has used Azure DevOps pipelines for years but has NEVER set up GitHub Actions. Do not assume familiarity. When you write the first workflow file, explain the mapping explicitly — ADO `trigger:` → GH `on:`; ADO `pool:` → GH `runs-on:`; ADO `steps:` → GH `steps:` (largely the same); ADO tasks (`DotNetCoreCLI@2`) → GH `run:` shell commands or marketplace `uses:` actions; ADO variable groups → GH repo secrets/variables; ADO service connections → GH OIDC federated identity (see Stage 1). Keep workflows plain and readable rather than clever.**
 
 **Build:** solution + project skeletons per layout; `PROGRESS.md`; `CLAUDE.md` (conventions, build/test commands, this plan's location); MIT `LICENSE`; first-pass `README.md`; `.gitignore` (dotnet + node + `*.local.json`); `.github/workflows/ci.yml` — on pull_request and push to main: `actions/checkout`, `actions/setup-dotnet@v4` (8.0.x), restore, `dotnet format --verify-no-changes`, build, `dotnet test`. Create GitHub Issues for the current stage's tasks and a GitHub Project (board) with Stages 0–9 as milestones.
-**⏸ CHECKPOINT 0.1:** Dan creates the **public** GitHub repo (`anchor` under `danjourno-dev`), runs `git remote add origin` + first push. Give him the exact commands. Confirm the Actions tab shows the CI run.
+**⏸ CHECKPOINT 0.1:** Dan creates the **public** GitHub repo (`remarkable-fullview` under `danjourno-dev`), runs `git remote add origin` + first push. Give him the exact commands. Confirm the Actions tab shows the CI run.
 **Done:** CI green on empty solution; issues + milestones visible; repo public with README and LICENSE.
 
 ## Stage 1 — Infrastructure (CDK) + deploy workflow
-**Build:** `Anchor.Infra` CDK app — DynamoDB table, API Gateway (HTTP API), placeholder Lambda, S3 bucket (inbox pages), SSM params, budget + alarms. `.github/workflows/cd-infra.yml`: on PR → `cdk diff` posted as a PR comment; on push to main → `cdk deploy`. Uses `permissions: id-token: write` + `aws-actions/configure-aws-credentials@v4` with `role-to-assume` (OIDC — **no long-lived AWS keys stored in GitHub**). Environment `production` with required reviewer = Dan, so deploys need his click.
+**Build:** `Fullview.Infra` CDK app — DynamoDB table, API Gateway (HTTP API), placeholder Lambda, S3 bucket (inbox pages), SSM params, budget + alarms. `.github/workflows/cd-infra.yml`: on PR → `cdk diff` posted as a PR comment; on push to main → `cdk deploy`. Uses `permissions: id-token: write` + `aws-actions/configure-aws-credentials@v4` with `role-to-assume` (OIDC — **no long-lived AWS keys stored in GitHub**). Environment `production` with required reviewer = Dan, so deploys need his click.
 
 **⏸ CHECKPOINT 1.1 — AWS ↔ GitHub trust (this replaces the ADO service connection; Dan has not done this before, so walk him through it click by click):**
 1. In AWS IAM → Identity providers → Add provider → OpenID Connect. Provider URL `https://token.actions.githubusercontent.com`, audience `sts.amazonaws.com`.
-2. Create an IAM role (`anchor-github-deploy`) with a trust policy restricting `token.actions.githubusercontent.com:sub` to `repo:danjourno-dev/anchor:*` — **Claude Code must generate this exact JSON for him** and explain why the `sub` condition matters (without it, any repo on GitHub could assume the role).
+2. Create an IAM role (`remarkable-fullview-github-deploy`) with a trust policy restricting `token.actions.githubusercontent.com:sub` to `repo:danjourno-dev/remarkable-fullview:*` — **Claude Code must generate this exact JSON for him** and explain why the `sub` condition matters (without it, any repo on GitHub could assume the role).
 3. Attach a least-privilege deploy policy (Claude Code generates; scope to the CDK-created resources + CloudFormation).
 4. Add the role ARN as a GitHub **repository variable** `AWS_DEPLOY_ROLE_ARN` (a variable, not a secret — an ARN isn't sensitive, and this keeps the workflow readable).
 5. Explain the model in one line: GitHub mints a short-lived OIDC token per run, AWS trades it for temporary credentials. Nothing persistent to leak — this is why we're not using access keys.
@@ -133,11 +133,11 @@ Navigation: left/right edge tap = prev/next screen (Today ↔ Todos ↔ Meals �
 **Done:** deployed stack, workflow-driven via OIDC, health check green, zero AWS secrets in GitHub.
 
 ## Stage 2 — Domain + Sync API
-**Build:** `Anchor.Domain` entities + sync metadata; `Anchor.Api` `/sync` handler (idempotent apply, LWW, delta query via GSI on UpdatedAt); seed script; xUnit suite incl. conflict cases (offline edit vs newer web edit; replayed mutation; tombstone).
+**Build:** `Fullview.Domain` entities + sync metadata; `Fullview.Api` `/sync` handler (idempotent apply, LWW, delta query via GSI on UpdatedAt); seed script; xUnit suite incl. conflict cases (offline edit vs newer web edit; replayed mutation; tombstone).
 **Done:** integration test drives two fake clients to convergence against deployed stack.
 
 ## Stage 3 — Device hello-world (the derisking stage)
-**Build:** `Anchor.Device` skeleton; fb0 P/Invoke blitter + MXCFB refresh (reference libremarkable struct layout); ImageSharp "Hello Dan" render; `publish-arm.sh` (self-contained linux-arm); deploy-over-SSH script.
+**Build:** `Fullview.Device` skeleton; fb0 P/Invoke blitter + MXCFB refresh (reference libremarkable struct layout); ImageSharp "Hello Dan" render; `publish-arm.sh` (self-contained linux-arm); deploy-over-SSH script.
 **⏸ CHECKPOINT 3.1:** device prep — **DEVIATION FROM ORIGINAL PLAN, already decided: the device shipped on OS 3.27.3.0, which is far outside Toltec's supported ceiling (3.3.2.1666). Rather than downgrade firmware, this project uses VELLUM (`vellum-dev/vellum-cli`), the actively-maintained successor that tracks current OS versions. No downgrade, no Toltec.** Dan follows the numbered guide: record SSH password (Settings → Help → Copyright and licenses), turn OFF automatic updates, SSH in over USB (`ssh root@10.11.99.1` — Windows has OpenSSH built in), bootstrap vellum-cli, `vellum check-os`, install a launcher. Record the exact OS version and vellum package list in PROGRESS.md.
 **Launcher caveat:** remux may be Toltec-only and not yet in Vellum's index — Claude Code must check `vellum search` and pick whatever launcher Vellum actually ships (AppLoad / Oxide / remux), then update this plan's references accordingly.
 **⏸ CHECKPOINT 3.2:** run hello-world binary on device; Dan confirms text on screen + memory footprint (`free`, RSS of process) recorded.
@@ -145,7 +145,7 @@ Navigation: left/right edge tap = prev/next screen (Today ↔ Todos ↔ Meals �
 **Done:** pixels on e-ink from our binary, deploy script repeatable.
 
 ## Stage 4 — Local-first device app
-**Build:** SQLite store + migrations (incl. device-local settings: current mode); `Anchor.Rendering` screens (Today, Todos, Agenda, Meals, Shopping, Recipe) with region-map hit-testing — the agenda card appears in **both** modes, filtered by context (Personal agenda is Google-backed from Stage 6.5; Work agenda is native in v1); **mode badge in Now/Next strip — single tap toggles Work/Personal, swaps screen set, re-renders with partial refresh; strip itself always renders cross-context with W/P tags per B3**; evdev touch → tap-to-complete with partial refresh; edge-tap navigation; seed data (seed both contexts); systemd unit; footer sync-status (static for now).
+**Build:** SQLite store + migrations (incl. device-local settings: current mode); `Fullview.Rendering` screens (Today, Todos, Agenda, Meals, Shopping, Recipe) with region-map hit-testing — the agenda card appears in **both** modes, filtered by context (Personal agenda is Google-backed from Stage 6.5; Work agenda is native in v1); **mode badge in Now/Next strip — single tap toggles Work/Personal, swaps screen set, re-renders with partial refresh; strip itself always renders cross-context with W/P tags per B3**; evdev touch → tap-to-complete with partial refresh; edge-tap navigation; seed data (seed both contexts); systemd unit; footer sync-status (static for now).
 **⏸ CHECKPOINT 4.1:** Dan lives with seeded board for a day; feedback captured as GitHub Issues (layout/type-size tweaks are expected here).
 **Done:** fully offline interactive dashboard on device.
 
@@ -155,7 +155,7 @@ Navigation: left/right edge tap = prev/next screen (Today ↔ Todos ↔ Meals �
 **Done:** two-way sync proven incl. offline queueing.
 
 ## Stage 6 — Web app
-**Build:** `Anchor.Web` (React, minimal, mobile-friendly): Work/Personal context switcher mirroring the device (plus an "All" view for triage); quick-add bar (natural date parsing, defaults new items to current context), lists CRUD, meal-week editor, recipe editor + "add ingredients to shopping", needs-review triage (empty for now), device status. `.github/workflows/cd-web.yml` deploys to S3+CloudFront via the same OIDC role.
+**Build:** `Fullview.Web` (React, minimal, mobile-friendly): Work/Personal context switcher mirroring the device (plus an "All" view for triage); quick-add bar (natural date parsing, defaults new items to current context), lists CRUD, meal-week editor, recipe editor + "add ingredients to shopping", needs-review triage (empty for now), device status. `.github/workflows/cd-web.yml` deploys to S3+CloudFront via the same OIDC role.
 **Done:** Dan manages all data from phone browser; syncs to device.
 
 ## Stage 6.5 — Google Calendar sync (BOTH agendas: Personal + Work)
@@ -170,7 +170,7 @@ calendars:
 Adding, removing, or re-tagging a calendar must be a **config change, not a code change**. There is no work-specific code path anywhere in the backend — the work agenda is just another Google calendar that happens to be populated by a flow.
 
 **Build:**
-- `Anchor.Api` — `CalendarPullFunction` Lambda on an EventBridge schedule (every 15 min). For **each** configured calendar, call Google Calendar API `events.list` with `singleEvents=true` (expands recurring events into instances — do NOT render RRULEs on-device), `orderBy=startTime`, window **now−1d to now+8d**.
+- `Fullview.Api` — `CalendarPullFunction` Lambda on an EventBridge schedule (every 15 min). For **each** configured calendar, call Google Calendar API `events.list` with `singleEvents=true` (expands recurring events into instances — do NOT render RRULEs on-device), `orderBy=startTime`, window **now−1d to now+8d**.
 - **Use `syncToken` incremental sync per calendar**, not a full re-fetch: store `nextSyncToken` **keyed by calendar id** in DynamoDB. On `410 Gone`, discard that calendar's token and do one full re-fetch. (Note: the Work mirror churns more than the Personal calendar because the flow rebuilds it every 30 min, so expect more deltas on that one — this is expected, not a bug.)
 - Map Google events → `AgendaEvent` with `Source=GoogleCalendar`, `ReadOnly=true`, `ExternalId=<google event id>`, and **`Context` taken from the calendar's config mapping, never inferred from event content**. Upsert by `ExternalId` (idempotent). `status=cancelled` → tombstone.
 - **All-day events**: Google returns `date` not `dateTime` — handle both; render all-day events as a band at the top of the agenda card, not a timed row.
@@ -179,7 +179,7 @@ Adding, removing, or re-tagging a calendar must be a **config change, not a code
 - Device: pulled events render with a subtle marker and **no tap-to-edit hit region**; they feed the Now/Next strip identically to native events (and the strip, per B3, shows both contexts regardless of mode — this is precisely why both calendars must be pulled even when the board is in one mode).
 
 **⏸ CHECKPOINT 6.5.1 — Google Cloud OAuth setup (Dan has not done this before; walk him through it click by click):**
-1. Google Cloud Console → create project `anchor-personal`.
+1. Google Cloud Console → create project `remarkable-fullview-personal`.
 2. Enable the **Google Calendar API**.
 3. OAuth consent screen → **External**, publishing status stays **Testing** with Dan as the sole test user (correct choice — avoids Google's app-verification process entirely; a Testing-mode refresh token is fine for single-user use).
 4. Credentials → OAuth client ID → **Desktop app** (avoids hosting a redirect URI).
@@ -191,12 +191,12 @@ Adding, removing, or re-tagging a calendar must be a **config change, not a code
 
 **Open-source note (README):** a forker brings their **own Google Cloud project, own OAuth client, own refresh token in their own SSM**, and configures their own calendar→context mapping. The Outlook-mirroring flow (Stage 6.6) is documented as an optional recipe, not a dependency — the puller neither knows nor cares how a calendar got populated.
 
-**Done:** both agendas on the device reflect Google within ~15 min, survive offline, and Anchor has never written a byte back to Google.
+**Done:** both agendas on the device reflect Google within ~15 min, survive offline, and remarkable-fullview has never written a byte back to Google.
 
 ## Stage 6.6 — Work calendar bridge (Outlook → Google mirror) — **ALREADY BUILT AND VERIFIED**
 **Status: DONE, outside the repo.** Dan has built and tested this flow. Claude Code does **not** need to build it — only to (a) document it in the repo as a recipe, and (b) make sure Stage 6.5's puller reads the mirror calendar it produces. Do not re-litigate this design.
 
-**Why this shape:** the employer's tenant blocks ICS calendar publishing, and Microsoft Graph would require an Entra app registration + admin consent — **explicitly out of scope, no IT ticket, do not propose it.** Power Automate is already sanctioned in the tenant, and both the Office 365 Outlook and Google Calendar connectors are **standard tier**, so the flow runs at **zero additional licence cost** under existing M365 seeded rights. (HTTP and custom-connector actions are premium — marked with a diamond icon — and Dan has standard connectors only. **The flow therefore must never call Anchor's API directly.**)
+**Why this shape:** the employer's tenant blocks ICS calendar publishing, and Microsoft Graph would require an Entra app registration + admin consent — **explicitly out of scope, no IT ticket, do not propose it.** Power Automate is already sanctioned in the tenant, and both the Office 365 Outlook and Google Calendar connectors are **standard tier**, so the flow runs at **zero additional licence cost** under existing M365 seeded rights. (HTTP and custom-connector actions are premium — marked with a diamond icon — and Dan has standard connectors only. **The flow therefore must never call remarkable-fullview's API directly.**)
 
 **The flow as built** (scheduled cloud flow, every 30 min):
 1. `Google Calendar — List the events on a calendar` (`Work (mirror)`, window `utcNow()` → `addDays(utcNow(), 3)`)
@@ -214,10 +214,10 @@ Adding, removing, or re-tagging a calendar must be a **config change, not a code
 
 **Privacy decision (Dan's call, record whichever he picked in PROGRESS.md):** the flow can mirror real meeting subjects, or mirror time-blocks only with a fixed title (`Work: Busy`). The board's core job is time-blindness support, which a titled block serves either way. Sensitive meetings marked Private in Outlook are already redacted by Outlook itself.
 
-**Backend cost of all this: one config line.** The `Work (mirror)` calendar id is added to the Stage 6.5 calendar list with `context: Work`. There is no other work-calendar code in Anchor.
+**Backend cost of all this: one config line.** The `Work (mirror)` calendar id is added to the Stage 6.5 calendar list with `context: Work`. There is no other work-calendar code in remarkable-fullview.
 
 ## Stage 7 — Handwriting capture pipeline## Stage 7 — Handwriting capture pipeline
-**Build:** device watcher on Inbox notebook (`~/.local/share/remarkable/xochitl/`) → page upload via outbox→S3; Lambda: `.rm` stroke parse → PNG (port the documented v5 stroke format to C#); Claude vision call (strict JSON schema, per-item confidence, **and per-item context Work|Personal** — deterministic overrides first: shopping/meal/recipe → Personal always; ambiguous context = Needs Review even when the type is confident); entity filing + Needs Review below threshold; InboxPage state machine (queued→processed→filed) surfaced on Today screen. **Captured agenda items are created as `Source=Native` (never pushed to Google — Anchor stays strictly read-only against Google Calendar); they sit alongside pulled events in the same agenda card.**
+**Build:** device watcher on Inbox notebook (`~/.local/share/remarkable/xochitl/`) → page upload via outbox→S3; Lambda: `.rm` stroke parse → PNG (port the documented v5 stroke format to C#); Claude vision call (strict JSON schema, per-item confidence, **and per-item context Work|Personal** — deterministic overrides first: shopping/meal/recipe → Personal always; ambiguous context = Needs Review even when the type is confident); entity filing + Needs Review below threshold; InboxPage state machine (queued→processed→filed) surfaced on Today screen. **Captured agenda items are created as `Source=Native` (never pushed to Google — remarkable-fullview stays strictly read-only against Google Calendar); they sit alongside pulled events in the same agenda card.**
 **⏸ CHECKPOINT 7.1:** Anthropic API key into **AWS SSM Parameter Store** (guide). It must NEVER be a GitHub secret or appear in the repo — the Lambda reads it from SSM at runtime.
 **⏸ CHECKPOINT 7.2:** live test — Dan writes a mixed page (todo + shopping + event), confirms correct filing; tune prompt with real samples.
 **Done:** scribble-to-structured round trip works, uncertain items quarantined.
@@ -231,7 +231,7 @@ Adding, removing, or re-tagging a calendar must be a **config change, not a code
 **Open-source release work:** README with screenshots of the board + capture pipeline, architecture diagram, "deploy your own" guide (fork → OIDC role → cdk bootstrap → device setup), `.github/workflows/release-device.yml` publishing the linux-arm device binary as a GitHub Release artifact, CONTRIBUTING.md, issue templates, topics/tags on the repo (`remarkable`, `e-ink`, `adhd`, `dotnet`, `aws-cdk`).
 
 **SECURITY.md + isolation documentation (explicit goal: code is public, Dan's live infrastructure is not usable by anyone else):**
-- **`SECURITY.md`** stating plainly: this repo contains no secrets and no live endpoints; forking the code does not grant access to the maintainer's AWS account, DynamoDB, or Anthropic usage; the OIDC trust policy (Checkpoint 1.1) restricts deploy access to `repo:danjourno-dev/anchor:*` only, so a fork cannot deploy into or read from the original AWS account under any circumstances; how to report a genuine vulnerability (email, not a public issue).
+- **`SECURITY.md`** stating plainly: this repo contains no secrets and no live endpoints; forking the code does not grant access to the maintainer's AWS account, DynamoDB, or Anthropic usage; the OIDC trust policy (Checkpoint 1.1) restricts deploy access to `repo:danjourno-dev/remarkable-fullview:*` only, so a fork cannot deploy into or read from the original AWS account under any circumstances; how to report a genuine vulnerability (email, not a public issue).
 - **README "Deploying your own instance" section**, written for a stranger forking the repo, covering what they must bring themselves: their own AWS account + `cdk bootstrap`, their own OIDC provider/trust policy pointed at their fork, their own Anthropic API key in their own SSM, their own device paired to their own API. Make explicit that there is no shared backend, no multi-tenant mode, and no signup flow in v1 — every deployment is fully independent.
 - **Threat-model note in the architecture doc:** the single-user API-key model (Stage 2) means the API surface is public knowledge but unusable without a key that's never committed; confirm this stays true in Stage 6/7 (web app auth, capture pipeline) — flag to Dan if any future stage would need this reviewed (e.g. adding a signup flow later).
 **⏸ CHECKPOINT 9.1:** disaster drill — restore seed from backup, redeploy device binary from clean SSH.
@@ -241,5 +241,5 @@ Adding, removing, or re-tagging a calendar must be a **config change, not a code
 ---
 
 # PART D — BACKLOG SEED (Claude Code: create in Stage 0)
-**Milestones** = Stages 0–9. Under each, create **GitHub Issues** from the Build bullets above, labelled by area (`device`, `backend`, `web`, `infra`, `docs`). Add a `v2` milestone containing: **two-way calendar write-back** (explicitly out of scope for v1 — Anchor is read-only against external calendars by design), Cognito auth, medication/reminder nudges via phone push, weekly-review screen, Kindle wall display as a second read-only client.
+**Milestones** = Stages 0–9. Under each, create **GitHub Issues** from the Build bullets above, labelled by area (`device`, `backend`, `web`, `infra`, `docs`). Add a `v2` milestone containing: **two-way calendar write-back** (explicitly out of scope for v1 — remarkable-fullview is read-only against external calendars by design), Cognito auth, medication/reminder nudges via phone push, weekly-review screen, Kindle wall display as a second read-only client.
 Mark a handful of self-contained issues `good first issue` — it's a public repo and that's how strangers start contributing.

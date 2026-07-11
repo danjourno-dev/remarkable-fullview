@@ -1,4 +1,4 @@
-# Anchor
+# remarkable-fullview
 
 An always-visible, distraction-free external brain for executive function,
 built for a reMarkable 1 tablet. It shows what matters *now*, what's *next*,
@@ -6,7 +6,7 @@ and turns handwritten scribbles from the tablet's pen into structured
 to-dos, shopping items, meals, and calendar entries — no WiFi required for
 the board to keep working.
 
-Anchor is opinionated about a few things:
+remarkable-fullview is opinionated about a few things:
 
 - **Glanceable over interactive.** Every screen answers its question in
   under 3 seconds. The tablet is mostly read; heavier input happens on
@@ -39,12 +39,12 @@ build currently stands.
 
 ```
 /src
-  Anchor.Domain      shared entities + sync metadata
-  Anchor.Rendering    ImageSharp screen renderer (shared device/server)
-  Anchor.Api          Lambda handlers (sync, capture, auth)
-  Anchor.Infra         CDK app (DynamoDB, API GW, Lambdas, S3, budgets/alarms)
-  Anchor.Device        reMarkable 1 app (framebuffer render, touch input, sync)
-  Anchor.Web           React SPA (capture, management, needs-review triage)
+  Fullview.Domain      shared entities + sync metadata
+  Fullview.Rendering    ImageSharp screen renderer (shared device/server)
+  Fullview.Api          Lambda handlers (sync, capture, auth)
+  Fullview.Infra         CDK app (DynamoDB, API GW, Lambdas, S3, budgets/alarms)
+  Fullview.Device        reMarkable 1 app (framebuffer render, touch input, sync)
+  Fullview.Web           React SPA (capture, management, needs-review triage)
 /tests                 mirrors src
 /docs                  build plan, runbooks, device setup notes
 ```
@@ -54,16 +54,16 @@ build currently stands.
 Requires the .NET 8 SDK.
 
 ```
-dotnet build Anchor.sln
-dotnet test Anchor.sln
-dotnet format Anchor.sln --verify-no-changes
+dotnet build Fullview.sln
+dotnet test Fullview.sln
+dotnet format Fullview.sln --verify-no-changes
 ```
 
 ## Deploying your own instance
 
 Not yet documented — this section will be filled in during the
 infrastructure and hardening stages of the build plan. Every deployment of
-Anchor is fully independent: your own AWS account, your own Anthropic API
+remarkable-fullview is fully independent: your own AWS account, your own Anthropic API
 key, your own device. There is no shared backend and no multi-tenant mode.
 
 ## Security

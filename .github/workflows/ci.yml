@@ -1,4 +1,4 @@
-# CI for Anchor.
+# CI for remarkable-fullview.
 #
 # Coming from Azure DevOps Pipelines? The mapping is close to 1:1:
 #   ADO `trigger:`                 -> GH `on:` (below)
@@ -32,13 +32,13 @@ jobs:
           dotnet-version: "8.0.x"
 
       - name: Restore
-        run: dotnet restore Anchor.sln
+        run: dotnet restore Fullview.sln
 
       - name: Check formatting
-        run: dotnet format Anchor.sln --verify-no-changes
+        run: dotnet format Fullview.sln --verify-no-changes
 
       - name: Build
-        run: dotnet build Anchor.sln --no-restore --configuration Release
+        run: dotnet build Fullview.sln --no-restore --configuration Release
 
       - name: Test
-        run: dotnet test Anchor.sln --no-build --configuration Release
+        run: dotnet test Fullview.sln --no-build --configuration Release

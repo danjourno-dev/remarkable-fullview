@@ -5,25 +5,25 @@ VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{827E0CD3-B72D-47B6-A68D-7590B98EB39B}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Anchor.Domain", "src\Anchor.Domain\Anchor.Domain.csproj", "{2F655937-AAF0-4C87-B228-082439A544C5}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fullview.Domain", "src\Fullview.Domain\Fullview.Domain.csproj", "{2F655937-AAF0-4C87-B228-082439A544C5}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Anchor.Rendering", "src\Anchor.Rendering\Anchor.Rendering.csproj", "{F3A35B70-7D66-4258-A6AD-8EA410BBC691}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fullview.Rendering", "src\Fullview.Rendering\Fullview.Rendering.csproj", "{F3A35B70-7D66-4258-A6AD-8EA410BBC691}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Anchor.Api", "src\Anchor.Api\Anchor.Api.csproj", "{6BA8410B-B8AF-4C55-BAE2-645BC8E07A82}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fullview.Api", "src\Fullview.Api\Fullview.Api.csproj", "{6BA8410B-B8AF-4C55-BAE2-645BC8E07A82}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Anchor.Infra", "src\Anchor.Infra\Anchor.Infra.csproj", "{3DD033C6-0382-4FC3-8BB5-E2EA44C9DA21}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fullview.Infra", "src\Fullview.Infra\Fullview.Infra.csproj", "{3DD033C6-0382-4FC3-8BB5-E2EA44C9DA21}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Anchor.Device", "src\Anchor.Device\Anchor.Device.csproj", "{141B6767-47A3-457A-A481-397D92A087F2}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fullview.Device", "src\Fullview.Device\Fullview.Device.csproj", "{141B6767-47A3-457A-A481-397D92A087F2}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{0AB3BF05-4346-4AA6-1389-037BE0695223}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Anchor.Domain.Tests", "tests\Anchor.Domain.Tests\Anchor.Domain.Tests.csproj", "{369144AD-5FFE-452C-A73B-7F5AB64ABB9E}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fullview.Domain.Tests", "tests\Fullview.Domain.Tests\Fullview.Domain.Tests.csproj", "{369144AD-5FFE-452C-A73B-7F5AB64ABB9E}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Anchor.Rendering.Tests", "tests\Anchor.Rendering.Tests\Anchor.Rendering.Tests.csproj", "{CCF883E6-1AC2-4A7A-AD5C-5BB2925BC3A3}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fullview.Rendering.Tests", "tests\Fullview.Rendering.Tests\Fullview.Rendering.Tests.csproj", "{CCF883E6-1AC2-4A7A-AD5C-5BB2925BC3A3}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Anchor.Api.Tests", "tests\Anchor.Api.Tests\Anchor.Api.Tests.csproj", "{41AB591F-29A1-4CC1-8CC4-BBEF73F87CA5}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fullview.Api.Tests", "tests\Fullview.Api.Tests\Fullview.Api.Tests.csproj", "{41AB591F-29A1-4CC1-8CC4-BBEF73F87CA5}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Anchor.Device.Tests", "tests\Anchor.Device.Tests\Anchor.Device.Tests.csproj", "{8BB09B55-A30F-4AE3-ADF1-AB3E1701A4BD}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fullview.Device.Tests", "tests\Fullview.Device.Tests\Fullview.Device.Tests.csproj", "{8BB09B55-A30F-4AE3-ADF1-AB3E1701A4BD}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

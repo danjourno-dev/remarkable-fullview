@@ -5,9 +5,9 @@
 Requires the .NET 8 SDK.
 
 ```
-dotnet build Anchor.sln
-dotnet test Anchor.sln
-dotnet format Anchor.sln --verify-no-changes
+dotnet build Fullview.sln
+dotnet test Fullview.sln
+dotnet format Fullview.sln --verify-no-changes
 ```
 
 These are the same three commands CI runs (`.github/workflows/ci.yml`) on
@@ -18,7 +18,7 @@ every pull request. Run them before pushing.
 - .NET 8, `Nullable` enabled, `ImplicitUsings` enabled.
 - xUnit for tests, mirrored under `/tests` by src project.
 - [Conventional commits](https://www.conventionalcommits.org/).
-- All AWS infrastructure is defined as C# CDK in `Anchor.Infra` — no
+- All AWS infrastructure is defined as C# CDK in `Fullview.Infra` — no
   console-created resources.
 
 ## What not to commit

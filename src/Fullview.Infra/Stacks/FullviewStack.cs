@@ -134,7 +134,10 @@ public sealed class FullviewStack : Stack
                 BudgetType = "COST",
                 TimeUnit = "MONTHLY",
                 BudgetName = $"{settings.ResourcePrefix}monthly",
-                BudgetLimit = new CfnBudget.SpendProperty { Amount = 10, Unit = "GBP" }
+                // AWS Budgets ties BudgetLimit.Unit to the account's billing currency —
+                // this account bills in USD, so GBP is rejected even though the plan's
+                // "£10/mo" guardrail is expressed in GBP. ~£10 at time of writing.
+                BudgetLimit = new CfnBudget.SpendProperty { Amount = 12, Unit = "USD" }
             },
             NotificationsWithSubscribers = new object[]
             {

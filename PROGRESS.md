@@ -141,6 +141,11 @@ do not redo it when Stage 3 comes up.
   synth-time asset (a real zip of source files) but NOT a deployable Lambda
   package, so a real `cdk deploy` always needs `LAMBDA_PACKAGE_PATH` set
   first.
+- **Stage 1 — budget is USD, not GBP.** First real deploy attempt failed:
+  `AWS::Budgets::Budget` rejected `Unit: GBP` because this AWS account's
+  billing currency is USD — `BudgetLimit.Unit` must match it. Changed to
+  `12 USD` (rough £10 equivalent at time of writing) to satisfy the plan's
+  "£10/mo guardrail" intent without fighting the account's fixed currency.
 
 ## Known issues / blockers
 

@@ -139,14 +139,3 @@ export type Entity =
   | RoutineCheck
   | ShoppingItem
   | InboxPage;
-
-export interface SyncRequest {
-  deviceId: string;
-  cursor: string | null;
-  outbox: Entity[];
-}
-
-export interface SyncResponse {
-  cursor: string;
-  delta: Entity[];
-}

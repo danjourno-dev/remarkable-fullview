@@ -1,7 +1,6 @@
 using System.Net.Http.Json;
 using Fullview.Domain;
 using Fullview.Domain.Entities;
-using Fullview.Domain.Sync;
 
 var baseUrl = Environment.GetEnvironmentVariable("FULLVIEW_API_BASE_URL");
 if (string.IsNullOrEmpty(baseUrl))
@@ -55,10 +54,11 @@ SyncEntity[] seed =
 
 using var http = new HttpClient { BaseAddress = new Uri(baseUrl) };
 
-var request = new SyncRequest { DeviceId = "seed-data", Outbox = seed.ToList() };
-var response = await http.PostAsJsonAsync("/sync", request);
-response.EnsureSuccessStatusCode();
+foreach (var entity in seed)
+{
+    var response = await http.PutAsJsonAsync<SyncEntity>($"/entities/{entity.Id}", entity);
+    response.EnsureSuccessStatusCode();
+}
 
-var result = await response.Content.ReadFromJsonAsync<SyncResponse>();
-Console.WriteLine($"Seeded {seed.Length} entities. New cursor: {result?.Cursor}");
+Console.WriteLine($"Seeded {seed.Length} entities.");
 return 0;

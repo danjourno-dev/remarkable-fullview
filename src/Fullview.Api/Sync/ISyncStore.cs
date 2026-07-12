@@ -11,9 +11,7 @@ public interface ISyncStore
 
     Task PutAsync(SyncEntity entity, CancellationToken ct);
 
-    /// <summary>Entities with UpdatedAt strictly after <paramref name="cursor"/> (null/empty
-    /// means "since the beginning"), ordered by UpdatedAt ascending, plus the cursor to use
-    /// on the next call (the last item's UpdatedAt, or the input cursor unchanged if nothing
-    /// new was found).</summary>
-    Task<(IReadOnlyList<SyncEntity> Items, string Cursor)> QueryDeltaAsync(string? cursor, CancellationToken ct);
+    /// <summary>Every entity for the user, including tombstones (Deleted=true) so a client
+    /// doing a full resync learns about deletions too.</summary>
+    Task<IReadOnlyList<SyncEntity>> GetAllAsync(CancellationToken ct);
 }

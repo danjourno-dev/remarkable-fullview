@@ -1,29 +1,38 @@
 using Fullview.Domain.Entities;
-using Fullview.Domain.Sync;
 
 namespace Fullview.Api.Sync;
 
-/// <summary>The `/sync` protocol's actual logic (B5): apply an outbox idempotently with
-/// last-write-wins conflict resolution, then return the delta since the caller's cursor.
-/// No AWS types here on purpose — see <see cref="ISyncStore"/>.</summary>
+/// <summary>The `/entities` protocol's actual logic: create (POST), last-write-wins
+/// upsert (PUT), and full-list read (GET). No AWS types here on purpose — see
+/// <see cref="ISyncStore"/>.</summary>
 public sealed class SyncService(ISyncStore store)
 {
-    public async Task<SyncResponse> ApplyAndPullAsync(SyncRequest request, CancellationToken ct)
-    {
-        foreach (var mutation in request.Outbox)
-        {
-            var existing = await store.GetAsync(mutation.SortKey, ct);
+    public Task<IReadOnlyList<SyncEntity>> GetAllAsync(CancellationToken ct) => store.GetAllAsync(ct);
 
-            // LWW: an incoming mutation only applies if it's at least as new as what's
-            // stored. Equal timestamps (a replayed mutation) re-apply the same data, which
-            // is a no-op in effect — that's what makes replay idempotent for free.
-            if (existing is null || existing.UpdatedAt <= mutation.UpdatedAt)
-            {
-                await store.PutAsync(mutation, ct);
-            }
+    /// <summary>POST semantics: fails if an entity with this Id/EntityType already exists.
+    /// Returns false (no write performed) when that's the case.</summary>
+    public async Task<bool> CreateAsync(SyncEntity entity, CancellationToken ct)
+    {
+        var existing = await store.GetAsync(entity.SortKey, ct);
+        if (existing is not null)
+        {
+            return false;
         }
 
-        var (items, cursor) = await store.QueryDeltaAsync(request.Cursor, ct);
-        return new SyncResponse { Cursor = cursor, Delta = items.ToList() };
+        await store.PutAsync(entity, ct);
+        return true;
+    }
+
+    /// <summary>PUT semantics: idempotent last-write-wins upsert. An incoming mutation only
+    /// applies if it's at least as new as what's stored. Equal timestamps (a replayed
+    /// mutation) re-apply the same data, which is a no-op in effect — that's what makes
+    /// replay idempotent for free.</summary>
+    public async Task ApplyMutationAsync(SyncEntity mutation, CancellationToken ct)
+    {
+        var existing = await store.GetAsync(mutation.SortKey, ct);
+        if (existing is null || existing.UpdatedAt <= mutation.UpdatedAt)
+        {
+            await store.PutAsync(mutation, ct);
+        }
     }
 }

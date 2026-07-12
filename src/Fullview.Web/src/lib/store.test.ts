@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
-  applyRemoteDelta,
+  applyRemoteSnapshot,
   clearOutboxThrough,
   getEntities,
   getOutbox,
@@ -50,29 +50,29 @@ describe("putLocal", () => {
   });
 });
 
-describe("applyRemoteDelta", () => {
+describe("applyRemoteSnapshot", () => {
   it("applies a remote entity when there is no local copy", () => {
-    applyRemoteDelta([todo()]);
+    applyRemoteSnapshot([todo()]);
     expect(listEntities<Todo>("Todo")).toHaveLength(1);
   });
 
   it("does not overwrite a newer local write with an older remote one (LWW)", () => {
     putLocal(todo({ title: "local newer", updatedAt: "2026-07-12T12:00:00.000Z" }));
-    applyRemoteDelta([todo({ title: "remote older", updatedAt: "2026-07-12T10:00:00.000Z" })]);
+    applyRemoteSnapshot([todo({ title: "remote older", updatedAt: "2026-07-12T10:00:00.000Z" })]);
 
     expect((getEntities()["01ABC"] as Todo).title).toBe("local newer");
   });
 
-  it("remote wins on an exact timestamp tie, matching DynamoSyncStore's server rule", () => {
+  it("does not overwrite on an exact timestamp tie, matching DeviceStore's strictly-newer rule", () => {
     putLocal(todo({ title: "local", updatedAt: "2026-07-12T12:00:00.000Z" }));
-    applyRemoteDelta([todo({ title: "remote", updatedAt: "2026-07-12T12:00:00.000Z" })]);
+    applyRemoteSnapshot([todo({ title: "remote", updatedAt: "2026-07-12T12:00:00.000Z" })]);
 
-    expect((getEntities()["01ABC"] as Todo).title).toBe("remote");
+    expect((getEntities()["01ABC"] as Todo).title).toBe("local");
   });
 
   it("applies a tombstone so deletions converge", () => {
     putLocal(todo());
-    applyRemoteDelta([todo({ deleted: true, updatedAt: "2026-07-12T12:00:00.000Z" })]);
+    applyRemoteSnapshot([todo({ deleted: true, updatedAt: "2026-07-12T12:00:00.000Z" })]);
 
     expect(getEntities()["01ABC"].deleted).toBe(true);
     expect(listEntities<Todo>("Todo")).toHaveLength(0);

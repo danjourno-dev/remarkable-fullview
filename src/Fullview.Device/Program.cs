@@ -1,9 +1,11 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Net.NetworkInformation;
 using System.Reflection;
 using System.Security.Cryptography.X509Certificates;
 using Fullview.Device;
 using Fullview.Device.Input;
+using Fullview.Device.Logging;
 using Fullview.Device.Storage;
 using Fullview.Device.Sync;
 using Fullview.Domain;
@@ -28,6 +30,16 @@ string version = Assembly.GetExecutingAssembly()
     ?? "dev";
 
 Console.WriteLine($"Fullview.Device starting (pid {Environment.ProcessId}), version={version}, db={dbPath}.");
+
+// Diagnostic-only, gated by ENABLE_LOGGING (docs/device-setup.md): if sync mysteriously
+// doesn't happen on open, this is the first thing to check with `tail -f fullview.log` — a
+// "(not set)" FULLVIEW_API_BASE_URL here despite /etc/fullview-sync.env looking right on disk
+// almost always means run.sh's sourcing of that file isn't exporting it into the process
+// environment, not a bug in the sync code itself.
+DeviceLog.Debug(
+    $"[env] FULLVIEW_DEVICE_ID={deviceId}, FULLVIEW_API_BASE_URL={apiBaseUrl ?? "(not set)"}, " +
+    $"FULLVIEW_API_KEY={(string.IsNullOrEmpty(apiKey) ? "(not set)" : "(set)")}, FULLVIEW_MODE={runMode}, " +
+    $"ENABLE_LOGGING={DeviceLog.Enabled}.");
 
 using var database = DeviceDatabase.Open(dbPath);
 var store = new DeviceStore(database);
@@ -56,10 +68,10 @@ if (string.Equals(runMode, "sync-once", StringComparison.OrdinalIgnoreCase))
     using var syncOnceHandler = CreateHttpHandler();
     using var syncOnceHttp = new HttpClient(syncOnceHandler) { BaseAddress = new Uri(apiBaseUrl!), Timeout = TimeSpan.FromSeconds(20) };
     AddApiKeyHeader(syncOnceHttp, apiKey);
-    var syncOnceEngine = new SyncEngine(store, settings, new SyncClient(syncOnceHttp), deviceId);
-    var syncOnceOutcome = syncOnceEngine.SyncOnceAsync(CancellationToken.None).GetAwaiter().GetResult();
-    Console.WriteLine($"[sync] sync-once: {syncOnceOutcome}.");
-    Environment.Exit(syncOnceOutcome == SyncOutcome.Succeeded ? 0 : 1);
+    var syncOnceEngine = new SyncEngine(store, settings, new SyncClient(syncOnceHttp));
+    var syncOnceResult = syncOnceEngine.SyncOnceAsync(CancellationToken.None).GetAwaiter().GetResult();
+    Console.WriteLine($"[sync] sync-once: {syncOnceResult.Outcome}.");
+    Environment.Exit(syncOnceResult.Outcome == SyncOutcome.Succeeded ? 0 : 1);
 }
 
 // A fresh read on every open (Stage 5): catches up on anything that changed via web/other
@@ -71,9 +83,9 @@ if (apiBaseUrl is not null)
 {
     var syncHttp = new HttpClient(CreateHttpHandler()) { BaseAddress = new Uri(apiBaseUrl), Timeout = TimeSpan.FromSeconds(8) };
     AddApiKeyHeader(syncHttp, apiKey);
-    syncEngine = new SyncEngine(store, settings, new SyncClient(syncHttp), deviceId);
-    var startupOutcome = syncEngine.SyncOnceAsync(CancellationToken.None).GetAwaiter().GetResult();
-    Console.WriteLine($"[sync] Startup sync: {startupOutcome}.");
+    syncEngine = new SyncEngine(store, settings, new SyncClient(syncHttp));
+    var startupResult = syncEngine.SyncOnceAsync(CancellationToken.None).GetAwaiter().GetResult();
+    Console.WriteLine($"[sync] Startup sync: {startupResult.Outcome}.");
 }
 else
 {
@@ -153,6 +165,44 @@ else
     buttonThread.Start();
 }
 
+// Keeps the on-device data converging with the server without waiting for the next app
+// open/manual tap: reconnect (event-driven) fires almost immediately, the timer is the
+// fallback for "wifi never dropped but the app's been open a while". Both are no-ops when
+// sync is disabled (FULLVIEW_API_BASE_URL unset).
+var lastNetworkTrigger = DateTimeOffset.MinValue;
+if (syncEngine is not null)
+{
+    NetworkChange.NetworkAddressChanged += (_, _) =>
+    {
+        if (!NetworkInterface.GetIsNetworkAvailable())
+        {
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        if (now - lastNetworkTrigger < TimeSpan.FromSeconds(10))
+        {
+            return;
+        }
+
+        lastNetworkTrigger = now;
+        DeviceLog.Debug("[sync] Network address changed and network is available; enqueuing background sync.");
+        inputs.Add(new DeviceInput(DeviceInputKind.SyncTick, 0, 0));
+    };
+}
+
+using var syncTimer = syncEngine is not null
+    ? new Timer(
+        _ =>
+        {
+            DeviceLog.Debug("[sync] Fallback timer fired; enqueuing background sync.");
+            inputs.Add(new DeviceInput(DeviceInputKind.SyncTick, 0, 0));
+        },
+        null,
+        TimeSpan.FromMinutes(5),
+        TimeSpan.FromMinutes(5))
+    : null;
+
 foreach (var input in inputs.GetConsumingEnumerable(cts.Token))
 {
     BoardAction? action = null;
@@ -160,6 +210,10 @@ foreach (var input in inputs.GetConsumingEnumerable(cts.Token))
     if (input.Kind == DeviceInputKind.HardwareButton)
     {
         action = new BoardAction.ToggleMode();
+    }
+    else if (input.Kind == DeviceInputKind.SyncTick)
+    {
+        action = new BoardAction.BackgroundSync();
     }
     else
     {
@@ -179,9 +233,20 @@ foreach (var input in inputs.GetConsumingEnumerable(cts.Token))
     var swTotal = Stopwatch.StartNew();
 
     var swApply = Stopwatch.StartNew();
+    var stateBeforeApply = state;
     state = Apply(action, state, store, settings, deviceId, syncEngine);
-    state = state with { LastSyncedAt = settings.GetLastSyncedAt(), PendingSyncCount = store.OutboxCount() };
     swApply.Stop();
+
+    // BoardAction.BackgroundSync's Apply case returns the same state reference (no `with`)
+    // when the sync failed or nothing changed — a cheap "nothing to redraw" signal that lets
+    // a background tick skip the render/blit/refresh-ioctl below entirely. Every other action
+    // (including SyncNow and all taps) always returns a new state and renders as before.
+    if (ReferenceEquals(state, stateBeforeApply))
+    {
+        continue;
+    }
+
+    state = state with { LastSyncedAt = settings.GetLastSyncedAt(), PendingSyncCount = store.OutboxCount() };
 
     RenderDiagnostics.Reset();
     var swRender = Stopwatch.StartNew();
@@ -311,8 +376,8 @@ static void TryImmediateSync(SyncEngine? syncEngine)
         return;
     }
 
-    var outcome = syncEngine.SyncOnceAsync(CancellationToken.None).GetAwaiter().GetResult();
-    Console.WriteLine($"[sync] Post-toggle sync: {outcome}.");
+    var result = syncEngine.SyncOnceAsync(CancellationToken.None).GetAwaiter().GetResult();
+    Console.WriteLine($"[sync] Post-toggle sync: {result.Outcome}.");
 }
 
 static void LogRegions(ScreenRenderResult render)
@@ -424,8 +489,36 @@ static BoardState Apply(
                 return state with { Now = DateTimeOffset.Now };
             }
 
-            var outcome = syncEngine.SyncOnceAsync(CancellationToken.None).GetAwaiter().GetResult();
-            Console.WriteLine($"[sync] Manual sync: {outcome}.");
+            var manualResult = syncEngine.SyncOnceAsync(CancellationToken.None).GetAwaiter().GetResult();
+            Console.WriteLine($"[sync] Manual sync: {manualResult.Outcome}.");
+            return state with
+            {
+                Todos = store.Query<Todo>(),
+                AgendaEvents = store.Query<AgendaEvent>(),
+                Meals = store.Query<Meal>(),
+                ShoppingItems = store.Query<ShoppingItem>(),
+                Recipes = store.Query<Recipe>(),
+                InboxPages = store.Query<InboxPage>(),
+                Now = DateTimeOffset.Now
+            };
+
+        // Per B2 ("stale is fine, never hidden"): a failed or no-op background sync just
+        // leaves state as-is (same reference — see the main loop's ReferenceEquals check),
+        // same as today's startup-sync failure handling. No error surfaced beyond the
+        // footer's existing pending/last-synced text.
+        case BoardAction.BackgroundSync:
+            if (syncEngine is null)
+            {
+                return state;
+            }
+
+            var bgResult = syncEngine.SyncOnceAsync(CancellationToken.None).GetAwaiter().GetResult();
+            DeviceLog.Debug($"[sync] Background sync: {bgResult.Outcome}, changed={bgResult.Changed}.");
+            if (bgResult.Outcome == SyncOutcome.Failed || !bgResult.Changed)
+            {
+                return state;
+            }
+
             return state with
             {
                 Todos = store.Query<Todo>(),
@@ -445,7 +538,8 @@ static BoardState Apply(
 internal enum DeviceInputKind
 {
     Tap,
-    HardwareButton
+    HardwareButton,
+    SyncTick
 }
 
 internal readonly record struct DeviceInput(DeviceInputKind Kind, int X, int Y);

@@ -3,7 +3,6 @@ import type { Entity } from "./types";
 
 const ENTITIES_KEY = "fullview.entities";
 const OUTBOX_KEY = "fullview.outbox";
-const CURSOR_KEY = "fullview.cursor";
 const DEVICE_ID_KEY = "fullview.deviceId";
 const LAST_SYNCED_KEY = "fullview.lastSyncedAt";
 
@@ -60,15 +59,6 @@ export function getDeviceId(): string {
   return id;
 }
 
-export function getCursor(): string | null {
-  return localStorage.getItem(CURSOR_KEY);
-}
-
-export function setCursor(cursor: string): void {
-  localStorage.setItem(CURSOR_KEY, cursor);
-  notify();
-}
-
 export function getLastSyncedAt(): string | null {
   return localStorage.getItem(LAST_SYNCED_KEY);
 }
@@ -112,14 +102,15 @@ export function putLocal(entity: Entity): void {
   notify();
 }
 
-/** Applies a delta pulled from `/sync`: last-write-wins by updatedAt, remote wins ties
- * (matches DynamoSyncStore's server-side rule) so a device's own echoed write doesn't
- * regress local state. */
-export function applyRemoteDelta(delta: Entity[]): void {
+/** Applies a full snapshot pulled from `GET /entities`: last-write-wins by updatedAt,
+ * skipping entities that aren't strictly newer than what's stored locally (matches the
+ * device's DeviceStore.ApplyRemoteSnapshot) so a just-pushed local write doesn't get
+ * regressed by its own echo coming back in the same snapshot. */
+export function applyRemoteSnapshot(snapshot: Entity[]): void {
   const entities = getEntities();
-  for (const remote of delta) {
+  for (const remote of snapshot) {
     const existing = entities[remote.id];
-    if (!existing || remote.updatedAt >= existing.updatedAt) {
+    if (!existing || remote.updatedAt > existing.updatedAt) {
       entities[remote.id] = remote;
     }
   }

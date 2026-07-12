@@ -1,4 +1,4 @@
-import type { SyncRequest, SyncResponse } from "./types";
+import type { Entity } from "./types";
 
 export class UnauthorizedError extends Error {
   constructor() {
@@ -16,14 +16,12 @@ export class SyncClient {
     this.apiKey = apiKey;
   }
 
-  async sync(request: SyncRequest): Promise<SyncResponse> {
-    const response = await fetch(`${this.baseUrl}/sync`, {
-      method: "POST",
+  async getAll(): Promise<Entity[]> {
+    const response = await fetch(`${this.baseUrl}/entities`, {
+      method: "GET",
       headers: {
-        "Content-Type": "application/json",
         "x-api-key": this.apiKey,
       },
-      body: JSON.stringify(request),
     });
 
     if (response.status === 401 || response.status === 403) {
@@ -31,9 +29,28 @@ export class SyncClient {
     }
 
     if (!response.ok) {
-      throw new Error(`POST /sync failed: ${response.status} ${response.statusText}`);
+      throw new Error(`GET /entities failed: ${response.status} ${response.statusText}`);
     }
 
-    return (await response.json()) as SyncResponse;
+    return (await response.json()) as Entity[];
+  }
+
+  async push(entity: Entity): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/entities/${entity.id}`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": this.apiKey,
+      },
+      body: JSON.stringify(entity),
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      throw new UnauthorizedError();
+    }
+
+    if (!response.ok) {
+      throw new Error(`PUT /entities/${entity.id} failed: ${response.status} ${response.statusText}`);
+    }
   }
 }

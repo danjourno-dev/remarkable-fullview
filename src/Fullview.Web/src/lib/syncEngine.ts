@@ -1,29 +1,21 @@
 import { SyncClient } from "./syncClient";
-import {
-  applyRemoteDelta,
-  clearOutboxThrough,
-  getCursor,
-  getDeviceId,
-  getOutbox,
-  setCursor,
-  setLastSyncedAt,
-} from "./store";
+import { applyRemoteSnapshot, clearOutboxThrough, getOutbox, setLastSyncedAt } from "./store";
 
-/** Mirrors the device's SyncEngine.SyncOnceAsync (Fullview.Device): drain the outbox
- * snapshot, POST /sync, apply the returned delta with the same LWW rule, advance the
- * cursor and lastSyncedAt. A failed call leaves the outbox and cursor untouched so the
- * next trigger retries — same contract as the device side. */
+/** Mirrors the device's SyncEngine.SyncOnceAsync (Fullview.Device): push the outbox one
+ * entity at a time (PUT per item, clearing each outbox entry only after its PUT succeeds),
+ * then GET /entities and apply the full snapshot. There's no cursor, so this always
+ * converges regardless of clock skew between this browser and whatever else writes to the
+ * store (see PROGRESS.md's Decisions for why the old cursor-based delta was dropped). A
+ * failed call leaves the remaining outbox untouched so the next trigger retries. */
 export async function syncOnce(client: SyncClient): Promise<void> {
-  const outboxSnapshot = getOutbox();
+  const outbox = getOutbox();
 
-  const response = await client.sync({
-    deviceId: getDeviceId(),
-    cursor: getCursor(),
-    outbox: outboxSnapshot,
-  });
+  for (const entity of outbox) {
+    await client.push(entity);
+    clearOutboxThrough(new Set([entity.id]));
+  }
 
-  applyRemoteDelta(response.delta);
-  clearOutboxThrough(new Set(outboxSnapshot.map((e) => e.id)));
-  setCursor(response.cursor);
+  const entities = await client.getAll();
+  applyRemoteSnapshot(entities);
   setLastSyncedAt(new Date().toISOString());
 }

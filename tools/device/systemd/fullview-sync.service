@@ -11,5 +11,6 @@ Wants=network-online.target
 Type=oneshot
 Environment=FULLVIEW_MODE=sync-once
 EnvironmentFile=-/etc/fullview-sync.env
+EnvironmentFile=-/etc/fullview.env
 ExecStart=__APP_DIR__/Fullview.Device
 WorkingDirectory=__APP_DIR__

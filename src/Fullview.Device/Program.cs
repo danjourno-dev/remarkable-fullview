@@ -30,9 +30,16 @@ var settings = new DeviceSettings(database);
 
 SeedData.ApplyIfEmpty(store);
 
-using var fb = FramebufferDevice.Open();
-Console.WriteLine(
-    $"Opened {FramebufferDevice.DevicePath} — {fb.Width}x{fb.Height}, {fb.BitsPerPixel}bpp, stride {fb.Stride} bytes.");
+// AppLoad (tools/device/appload/external.manifest.json, qtfb: true) hands us a framebuffer
+// key via QTFB_KEY when it launches us from the launcher; its absence means we were
+// hand-launched over SSH and should fall back to driving /dev/fb0 and evdev directly.
+string? qtfbKeyRaw = Environment.GetEnvironmentVariable("QTFB_KEY");
+using IScreen fb = qtfbKeyRaw is { } raw && int.TryParse(raw, out int qtfbKey)
+    ? QtfbScreen.Connect(qtfbKey)
+    : FramebufferDevice.Open();
+Console.WriteLine(fb is QtfbScreen
+    ? $"Connected to qtfb (QTFB_KEY={qtfbKeyRaw}) — {fb.Width}x{fb.Height} RGB565."
+    : $"Opened {FramebufferDevice.DevicePath} — {fb.Width}x{fb.Height}.");
 
 var mode = settings.GetMode();
 var state = new BoardState(
@@ -64,15 +71,35 @@ Console.CancelKeyPress += (_, e) =>
 // consumer, so it's the only place BoardState/lastRender ever mutate.
 var inputs = new BlockingCollection<DeviceInput>();
 
-using var touch = EvdevDevice.Open(touchDevicePath);
-Console.WriteLine($"Opened touch device {touchDevicePath}. Listening for taps (Ctrl+C to exit).");
-var touchThread = new Thread(() => RunTouchLoop(touch, inputs, fb.Width, fb.Height, cts.Token)) { IsBackground = true };
-touchThread.Start();
+// Not `using var`: touch/button are read from background threads for the life of the
+// program, so they must only be disposed once those threads are done, at the very end below
+// — disposing them as soon as this block exits would close the fds out from under
+// RunTouchLoop/RunButtonLoop right after starting them.
+EvdevDevice? touch = null;
+EvdevDevice? button = null;
 
-using var button = EvdevDevice.Open(buttonDevicePath);
-Console.WriteLine($"Opened hardware button device {buttonDevicePath}. Right button switches mode.");
-var buttonThread = new Thread(() => RunButtonLoop(button, inputs, cts.Token)) { IsBackground = true };
-buttonThread.Start();
+// Under qtfb, AppLoad pushes touch/pen/button input back over the same socket the screen
+// connection uses, so evdev is never opened — it would just be reading devices xochitl is
+// also reading, which is exactly the contention this migration is meant to avoid.
+if (fb is QtfbScreen qtfbScreen)
+{
+    var qtfbInput = new QtfbInputSource(qtfbScreen);
+    Console.WriteLine("Listening for qtfb input (Ctrl+C to exit).");
+    var qtfbInputThread = new Thread(() => qtfbInput.Run(inputs, cts.Token)) { IsBackground = true };
+    qtfbInputThread.Start();
+}
+else
+{
+    touch = EvdevDevice.Open(touchDevicePath);
+    Console.WriteLine($"Opened touch device {touchDevicePath}. Listening for taps (Ctrl+C to exit).");
+    var touchThread = new Thread(() => RunTouchLoop(touch, inputs, fb.Width, fb.Height, cts.Token)) { IsBackground = true };
+    touchThread.Start();
+
+    button = EvdevDevice.Open(buttonDevicePath);
+    Console.WriteLine($"Opened hardware button device {buttonDevicePath}. Right button switches mode.");
+    var buttonThread = new Thread(() => RunButtonLoop(button, inputs, cts.Token)) { IsBackground = true };
+    buttonThread.Start();
+}
 
 foreach (var input in inputs.GetConsumingEnumerable(cts.Token))
 {
@@ -134,6 +161,9 @@ foreach (var input in inputs.GetConsumingEnumerable(cts.Token))
         $"total-app={swTotal.ElapsedMilliseconds}ms (excludes physical e-ink transition time, which " +
         "happens in hardware after refresh-ioctl returns).");
 }
+
+touch?.Dispose();
+button?.Dispose();
 
 Console.WriteLine("Exiting.");
 

@@ -19,10 +19,20 @@ for anyone forking this repo — nothing here is specific to any one device.
 
 ## Build and deploy
 
+The app is launched from the AppLoad launcher, not by hand over SSH — AppLoad
+starts it with `qtfb: true`, which gives it a shared drawing surface instead
+of raw `/dev/fb0` access, so it no longer fights `xochitl` for the
+framebuffer.
+
 ```bash
 tools/device/publish-arm.sh          # self-contained linux-arm build -> artifacts/device/
-DEVICE_HOST=<device-ip> tools/device/deploy-over-ssh.sh   # scp + run once, foreground
+DEVICE_HOST=<device-ip> tools/device/deploy-over-ssh.sh   # installs into AppLoad
 ```
+
+This installs the app as an AppLoad external application at
+`/home/root/xovi/exthome/appload/fullview/` (AppLoad id `external::fullview`).
+Launch "Fullview" from the AppLoad launcher on the device's home screen; drag
+from the center-top of the screen to the center to close it.
 
 `deploy-over-ssh.sh` env vars (all optional):
 
@@ -30,12 +40,38 @@ DEVICE_HOST=<device-ip> tools/device/deploy-over-ssh.sh   # scp + run once, fore
 |---|---|---|
 | `DEVICE_HOST` | `10.11.99.1` | reMarkable's standard USB IP |
 | `DEVICE_USER` | `root` | the device's only SSH user |
-| `DEVICE_DIR` | `/home/root/fullview-device-dir` | remote install directory |
+| `APPLOAD_DIR` | `/home/root/xovi/exthome/appload` | remote AppLoad apps directory |
+| `APP_NAME` | `fullview` | the AppLoad app directory name / id suffix |
 
 `PublishSingleFile` bundles the managed app into one executable but leaves
 native libraries (e.g. `libe_sqlite3.so`, used by the SQLite store) as loose
 files next to it, so the whole publish output directory is copied to the
 device, not just the executable.
+
+The manifest (`tools/device/appload/external.manifest.json`) sets
+`qtfb: true`, so AppLoad passes a framebuffer key in the `QTFB_KEY`
+environment variable and the app talks to AppLoad's qtfb socket
+(`/tmp/qtfb.sock`) instead of opening `/dev/fb0` directly — see
+`QtfbScreen`/`QtfbInputSource` in `src/Fullview.Device/`. Running the binary
+by hand over SSH without `QTFB_KEY` set still works for local debugging: it
+falls back to `FramebufferDevice` (direct `/dev/fb0` + evdev), the original
+hand-launch path.
+
+The manifest's `application` points at `run.sh`, a thin wrapper that `exec`s
+`Fullview.Device` with stdout/stderr appended to `fullview.log` in the same
+app directory — this guarantees the app's console output (including the
+per-tap `[debug] Timing: ...` breakdown logged in `Program.cs`) lands
+somewhere you can read over SSH, regardless of how AppLoad itself handles a
+launched app's own stdout. `tail -f
+/home/root/xovi/exthome/appload/fullview/fullview.log` while using the app on
+the device is the fastest way to see what's actually slow.
+
+The publish script passes `-p:PublishReadyToRun=true`, which ahead-of-time
+compiles the app and its dependencies (ImageSharp in particular) to native ARM
+code at publish time instead of JIT-compiling them on first use. This is
+meant to cut down cold-start time on the rM1's slow CPU; it doesn't require
+trimming (`PublishTrimmed` stays `false` — the SQLite store uses
+reflection-based JSON serialization that trimming can silently break).
 
 ## Runtime configuration
 
@@ -55,26 +91,16 @@ value gpio-keys is expected to report for the right-hand button) is not yet
 confirmed on real hardware — if the button doesn't switch mode, check the
 actual code with `evtest /dev/input/event1` (or `cat`ing the device while
 pressing it) and update `EvCodes.KEY_RIGHT` in
-`src/Fullview.Device/Input/RawInputEvent.cs`. If your unit's touch or button
-node differs, run the same `/proc/bus/input/devices` command on the device to
-find the right `eventN` and set `FULLVIEW_TOUCH_DEVICE`/`FULLVIEW_BUTTON_DEVICE`
-accordingly — either as a one-off env var, or by adding an `Environment=` line
-to the systemd unit below.
+`src/Fullview.Device/Input/RawInputEvent.cs`. These two only apply to the
+direct-SSH fallback path (no `QTFB_KEY`); under AppLoad, touch/button input
+arrives over the qtfb socket instead — see `QtfbInputSource`. If your unit's
+touch or button node differs, run the same `/proc/bus/input/devices` command
+on the device to find the right `eventN` and set
+`FULLVIEW_TOUCH_DEVICE`/`FULLVIEW_BUTTON_DEVICE` accordingly, either as a
+one-off env var or via the manifest's `environment` map (see
+`tools/device/appload/external.manifest.json`).
 
-## Running as a background service
-
-Once `deploy-over-ssh.sh` has confirmed the binary runs correctly in the
-foreground, install it as a systemd service so it starts on boot and
-restarts if it crashes:
-
-```bash
-scp tools/device/fullview-device.service root@<device-ip>:/etc/systemd/system/
-ssh root@<device-ip> "systemctl daemon-reload && systemctl enable --now fullview-device"
-```
-
-Check it's running and see its logs:
-
-```bash
-ssh root@<device-ip> "systemctl status fullview-device"
-ssh root@<device-ip> "journalctl -u fullview-device -f"
-```
+There is deliberately no systemd unit or other auto-restarting background
+service for this app: AppLoad owns starting and stopping it (from the
+launcher, and via the drag-to-close gesture), and an independently
+restarting service would fight AppLoad for the same qtfb registration.

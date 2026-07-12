@@ -10,7 +10,7 @@ namespace Fullview.Device;
 /// the rM1's known 1404x1872), mmaps the frame memory, and drives the
 /// mxcfb e-ink controller to redraw after a write.
 /// </summary>
-public sealed class FramebufferDevice : IDisposable
+public sealed class FramebufferDevice : IScreen
 {
     public static string DevicePath => Fb.DevicePath;
 
@@ -131,24 +131,6 @@ public sealed class FramebufferDevice : IDisposable
         }
     }
 
-    // All 256 gray levels fit a lookup table, so the RGB565 conversion below is a table read
-    // instead of shifting/masking per pixel every frame.
-    private static readonly ushort[] GrayToRgb565Table = BuildGrayToRgb565Table();
-
-    private static ushort[] BuildGrayToRgb565Table()
-    {
-        var table = new ushort[256];
-        for (int gray = 0; gray < table.Length; gray++)
-        {
-            int r = gray >> 3; // 5 bits
-            int g = gray >> 2; // 6 bits
-            int b = gray >> 3; // 5 bits
-            table[gray] = (ushort)((r << 11) | (g << 5) | b);
-        }
-
-        return table;
-    }
-
     private void WriteImageRgb565(Image<L8> image)
     {
         // Building each row in managed memory and Marshal.Copy'ing it as a single block avoids
@@ -161,7 +143,7 @@ public sealed class FramebufferDevice : IDisposable
                 var row = accessor.GetRowSpan(y);
                 for (int x = 0; x < row.Length; x++)
                 {
-                    ushort rgb565 = GrayToRgb565Table[row[x].PackedValue];
+                    ushort rgb565 = Rgb565.FromGray8[row[x].PackedValue];
                     _rowBuffer[x * 2] = (byte)rgb565;
                     _rowBuffer[x * 2 + 1] = (byte)(rgb565 >> 8);
                 }

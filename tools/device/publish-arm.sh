@@ -20,6 +20,7 @@ dotnet publish "$PROJECT" \
   --self-contained true \
   -p:PublishSingleFile=true \
   -p:PublishTrimmed=false \
+  -p:PublishReadyToRun=true \
   -p:InformationalVersion="$BUILD_VERSION" \
   -o "$OUTPUT_DIR"
 

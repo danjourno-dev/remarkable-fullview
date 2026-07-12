@@ -1,0 +1,7 @@
+{
+  "name": "Fullview",
+  "application": "run.sh",
+  "qtfb": true,
+  "disablesWindowedMode": true,
+  "aspectRatio": "original"
+}

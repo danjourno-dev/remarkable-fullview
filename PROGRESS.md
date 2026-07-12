@@ -795,3 +795,53 @@ close Stage 4. Session 9 reworked the UI to match `docs/mockup-v4.png`
   layout gaps the same way. Checkpoint 4.1 (real device) is still the
   final gate before Stage 4 is closed, but doing another round or two of
   dev-machine visual QA first will surface cheaper fixes before that trip.
+
+### 2026-07-12 — Session 11 (AppLoad launcher migration)
+
+- Dan had been hand-launching the app over SSH, which fights `xochitl` for
+  both the framebuffer and the input devices. Preflight over SSH confirmed
+  AppLoad (asivery/rm-appload) and its qt-resource-rebuilder dependency are
+  already installed under `/home/root/xovi/` and **do run on this rM1**
+  (README's `aspectRatio: "original"` explicitly covers rM1/rM2/rMPP) —
+  `/home/root/xovi/exthome/appload/` didn't exist yet (no apps installed),
+  and `fullview-device.service` had never actually been deployed
+  (`not-found`/`inactive`), though a stray hand-launched process was running.
+- Rather than ship a raw-fb0 `qtfb: false` staging step, Dan chose to
+  implement a real qtfb client first, so the app renders into AppLoad's
+  shared surface instead of fighting xochitl for `/dev/fb0`. Built from
+  reading AppLoad's own source (`src/qtfb/`): an `IScreen` abstraction
+  (`FramebufferDevice` and the new `QtfbScreen` both implement it),
+  `QtfbScreen` (Native/`Qtfb.cs` P/Invoke — AF_UNIX SOCK_SEQPACKET socket at
+  `/tmp/qtfb.sock`, 24-byte messages, shared-memory RGB565 surface at
+  `/dev/shm/qtfb_<key>`), and `QtfbInputSource` (reads MESSAGE_USERINPUT off
+  the same connection, already in screen pixel coordinates — no
+  767x1023 rescale or 180° flip like the raw digitizer needs).
+  `Program.cs` picks the qtfb path when `QTFB_KEY` is set (i.e. launched by
+  AppLoad) and falls back to the original `FramebufferDevice` + evdev path
+  otherwise (hand-launch over SSH still works for local debugging).
+  Extracted the gray8→RGB565 lookup table into `Rgb565.cs`, shared by both
+  screens (previously private to `FramebufferDevice`).
+- Deleted `tools/device/fullview-device.service`: an auto-restarting
+  background service that owns the framebuffer is fundamentally incompatible
+  with a launcher-managed app. Rewrote `deploy-over-ssh.sh` to install into
+  `/home/root/xovi/exthome/appload/fullview/` (AppLoad id
+  `external::fullview`) instead of `/home/root/fullview-device-dir`, disabling
+  any leftover systemd unit first. Added
+  `tools/device/appload/external.manifest.json` (`qtfb: true,
+  disablesWindowedMode: true, aspectRatio: "original"`) and a generated "FV"
+  monogram placeholder `icon.png`. Updated `docs/device-setup.md` to match.
+- All three CI commands green (build/test/format) with new tests for the
+  qtfb message encoding (`QtfbMessageTests`), the RGB565 table
+  (`Rgb565Tests`), and the input press/release → tap mapping
+  (`QtfbInputSourceTests`, using a scripted `Func<QtfbUserInput>` feed rather
+  than a live socket, since `dotnet test` runs on Windows and can't load
+  `libc`).
+- **Not yet run on the device.** Next: `publish-arm.sh` +
+  `deploy-over-ssh.sh`, launch "Fullview" from the AppLoad launcher, confirm
+  the board renders without overdraw/contention with xochitl, and — the key
+  open question — confirm xochitl actually forwards touch input to the qtfb
+  client on rM1 (tap a checkbox). If it doesn't, the documented fallback is
+  to keep reading evdev directly even under qtfb (render via qtfb, input via
+  evdev); the `IScreen`/input-source split supports mixing them. Whether
+  physical hardware buttons arrive as qtfb `INPUT_BTN_*` events at all is a
+  second, separate unknown — noted in `QtfbInputSource` but not resolved.

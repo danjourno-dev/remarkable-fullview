@@ -180,13 +180,12 @@ A forker deploying their own stack under a different `ResourcePrefix` uses
 `FULLVIEW_API_KEY_PARAM` environment variable (set by the CDK stack) always
 points at the right name for that deployment.
 
-**Fullview.Web (Stage 6)** bakes the same key into its browser bundle at
-build time (`VITE_API_KEY`) — see Fullview.Web/README.md for why that's an
-accepted v1 tradeoff (single user, Cognito is v2). Locally, put it in
-`src/Fullview.Web/.env.local` (gitignored). In CI, `cd-web.yml` reads it from
-the **`FULLVIEW_API_KEY` GitHub Actions secret** (Settings → Secrets and
-variables → Actions → New repository secret) — set it to the same value as
-the SSM parameter above.
+**Fullview.Web (Stage 6)** does *not* bake this key into its browser bundle —
+a public CloudFront-hosted SPA can't keep a build-time secret out of the JS it
+ships to every visitor. Instead the web app prompts for the API key at
+runtime (a login screen backed by `AuthGate`) and stores it in the browser's
+`localStorage` after that. Give the key to whoever should have access; there
+is no separate password or account system (single user, Cognito is v2).
 
 ## Google Calendar sync (Stage 6.5)
 
@@ -195,6 +194,17 @@ agenda every 15 minutes (EventBridge schedule). It is context-agnostic — a
 calendar's Work/Personal tagging comes entirely from the config parameter
 below, never from event content. Like the API key above, none of this ever
 lives in the repo or GitHub — three parameters, all created by hand.
+
+**On Windows, run these from Git Bash, not native PowerShell or cmd.exe.**
+The commands below use bash `\` line continuations and single-quoted JSON
+`--value` arguments — PowerShell and cmd.exe don't treat backslash as a line
+continuation or single quotes as literal-string delimiters the same way bash
+does, and copy-pasting these as-is into either can silently strip the quotes
+around JSON keys (the parameter ends up storing `{clientId:...}` instead of
+`{"clientId":...}`, which fails to parse at Lambda runtime with a
+`JsonException`). If you must use PowerShell, use the PowerShell variant given
+alongside each command below (backtick line continuations, same single-quoted
+JSON), or paste the whole command as one line.
 
 ### 1. Google Cloud OAuth client (checkpoint 6.5.1)
 
@@ -214,6 +224,15 @@ lives in the repo or GitHub — three parameters, all created by hand.
    aws ssm put-parameter \
      --name /fullview-google-oauth-client \
      --type SecureString \
+     --value '{"clientId":"<client id>.apps.googleusercontent.com","clientSecret":"<client secret>"}'
+   ```
+
+   PowerShell equivalent:
+
+   ```powershell
+   aws ssm put-parameter `
+     --name /fullview-google-oauth-client `
+     --type SecureString `
      --value '{"clientId":"<client id>.apps.googleusercontent.com","clientSecret":"<client secret>"}'
    ```
 
@@ -238,6 +257,15 @@ aws ssm put-parameter \
   --value "<refresh token printed above>"
 ```
 
+PowerShell equivalent:
+
+```powershell
+aws ssm put-parameter `
+  --name /fullview-google-refresh-token `
+  --type SecureString `
+  --value "<refresh token printed above>"
+```
+
 One consent covers every calendar on the account, which is why the
 two-calendar (Personal + Work) model below costs nothing extra.
 
@@ -251,6 +279,15 @@ here, never a code change:
 aws ssm put-parameter \
   --name /fullview-google-calendars \
   --type String \
+  --value '[{"id":"you@gmail.com","context":"Personal"},{"id":"<work-mirror calendar id>","context":"Work"}]'
+```
+
+PowerShell equivalent:
+
+```powershell
+aws ssm put-parameter `
+  --name /fullview-google-calendars `
+  --type String `
   --value '[{"id":"you@gmail.com","context":"Personal"},{"id":"<work-mirror calendar id>","context":"Work"}]'
 ```
 

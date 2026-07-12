@@ -1,5 +1,6 @@
 import { NavLink } from "react-router-dom";
 import type { ViewMode } from "../context/appContextDefinition";
+import { clearStoredApiKey } from "../lib/auth";
 import { useApp } from "../lib/useApp";
 import { useLastSyncedAt, useOutboxCount } from "../lib/useStore";
 
@@ -17,6 +18,11 @@ const NAV_ITEMS = [
 function formatSyncedAt(iso: string | null): string {
   if (!iso) return "never";
   return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function handleLogout() {
+  clearStoredApiKey();
+  window.location.reload();
 }
 
 export function Header() {
@@ -49,6 +55,9 @@ export function Header() {
       </nav>
       <button className="sync-status" onClick={triggerSync} disabled={syncing}>
         {syncing ? "syncing…" : `synced ${formatSyncedAt(lastSyncedAt)} · ${pending} pending`}
+      </button>
+      <button className="link-button logout-button" onClick={handleLogout}>
+        Log out
       </button>
       {syncError && <div className="sync-error">Sync failed: {syncError}</div>}
     </header>

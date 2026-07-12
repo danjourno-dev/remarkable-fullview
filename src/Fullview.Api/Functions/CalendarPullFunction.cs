@@ -46,15 +46,31 @@ public sealed class CalendarPullFunction
     private static async Task<GoogleOAuthCredentials> FetchOAuthClientAsync()
     {
         var json = await FetchParameterAsync(OAuthClientParam, withDecryption: true);
-        return JsonSerializer.Deserialize<GoogleOAuthCredentials>(json, CalendarConfigJson)
-            ?? throw new InvalidOperationException($"SSM parameter {OAuthClientParam} did not contain valid OAuth client JSON.");
+        try
+        {
+            return JsonSerializer.Deserialize<GoogleOAuthCredentials>(json, CalendarConfigJson)
+                ?? throw new InvalidOperationException($"SSM parameter {OAuthClientParam} did not contain valid OAuth client JSON.");
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(
+                $"SSM parameter {OAuthClientParam} is not valid JSON (see docs/device-setup.md checkpoint 6.5.1 for the expected {{\"clientId\":...,\"clientSecret\":...}} shape).", ex);
+        }
     }
 
     private static async Task<IReadOnlyList<CalendarConfig>> FetchCalendarsAsync()
     {
         var json = await FetchParameterAsync(CalendarsParam, withDecryption: false);
-        return JsonSerializer.Deserialize<List<CalendarConfig>>(json, CalendarConfigJson)
-            ?? throw new InvalidOperationException($"SSM parameter {CalendarsParam} did not contain a valid calendar list.");
+        try
+        {
+            return JsonSerializer.Deserialize<List<CalendarConfig>>(json, CalendarConfigJson)
+                ?? throw new InvalidOperationException($"SSM parameter {CalendarsParam} did not contain a valid calendar list.");
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(
+                $"SSM parameter {CalendarsParam} is not valid JSON (see docs/device-setup.md's calendar config section for the expected [{{\"id\":...,\"context\":...}}] shape).", ex);
+        }
     }
 
     private static async Task<string> FetchParameterAsync(string name, bool withDecryption)

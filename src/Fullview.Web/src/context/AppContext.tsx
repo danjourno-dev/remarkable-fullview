@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { apiBaseUrl, apiKey } from "../lib/config";
-import { SyncClient } from "../lib/syncClient";
+import { apiBaseUrl } from "../lib/config";
+import { clearStoredApiKey, getStoredApiKey, setAuthError } from "../lib/auth";
+import { SyncClient, UnauthorizedError } from "../lib/syncClient";
 import { syncOnce } from "../lib/syncEngine";
 import { SyncContext as EntityContext } from "../lib/types";
 import { AppContext, type AppContextValue, type ViewMode } from "./appContextDefinition";
@@ -9,7 +10,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [mode, setMode] = useState<ViewMode>("Personal");
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
-  const client = useMemo(() => new SyncClient(apiBaseUrl, apiKey), []);
+  const client = useMemo(() => new SyncClient(apiBaseUrl, getStoredApiKey() ?? ""), []);
   const inFlight = useRef(false);
 
   const triggerSync = useMemo(
@@ -19,7 +20,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setSyncing(true);
       syncOnce(client)
         .then(() => setSyncError(null))
-        .catch((error: unknown) => setSyncError(error instanceof Error ? error.message : String(error)))
+        .catch((error: unknown) => {
+          if (error instanceof UnauthorizedError) {
+            // The stored key was rejected by the API — clear it and reload back to
+            // the login screen (AuthGate reads localStorage fresh on mount).
+            setAuthError("Incorrect API key.");
+            clearStoredApiKey();
+            window.location.reload();
+            return;
+          }
+          setSyncError(error instanceof Error ? error.message : String(error));
+        })
         .finally(() => {
           inFlight.current = false;
           setSyncing(false);

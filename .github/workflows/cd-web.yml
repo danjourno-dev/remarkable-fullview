@@ -80,7 +80,6 @@ jobs:
       - name: Build
         env:
           VITE_API_BASE_URL: ${{ steps.stack.outputs.api_url }}
-          VITE_API_KEY: ${{ secrets.FULLVIEW_API_KEY }}
         run: npm run build
 
       - name: Sync to S3

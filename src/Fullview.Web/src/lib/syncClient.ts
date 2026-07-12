@@ -1,5 +1,12 @@
 import type { SyncRequest, SyncResponse } from "./types";
 
+export class UnauthorizedError extends Error {
+  constructor() {
+    super("Unauthorized");
+    this.name = "UnauthorizedError";
+  }
+}
+
 export class SyncClient {
   private readonly baseUrl: string;
   private readonly apiKey: string;
@@ -18,6 +25,10 @@ export class SyncClient {
       },
       body: JSON.stringify(request),
     });
+
+    if (response.status === 401 || response.status === 403) {
+      throw new UnauthorizedError();
+    }
 
     if (!response.ok) {
       throw new Error(`POST /sync failed: ${response.status} ${response.statusText}`);

@@ -3,12 +3,16 @@ using Fullview.Domain;
 namespace Fullview.Device.Storage;
 
 /// <summary>
-/// Device-local UI state that is never synced (B5): today, just the current mode. Defaults
-/// to Personal on first boot (no row yet) rather than requiring an explicit initial value.
+/// Device-local UI/sync bookkeeping state, never itself synced (B5): current mode, plus
+/// (Stage 5) the last cursor seen from `/sync` and when the last successful sync completed.
+/// Mode defaults to Personal on first boot (no row yet) rather than requiring an explicit
+/// initial value; cursor/last-synced default to "never synced" the same way.
 /// </summary>
 public sealed class DeviceSettings
 {
     private const string ModeKey = "mode";
+    private const string SyncCursorKey = "sync_cursor";
+    private const string LastSyncedAtKey = "last_synced_at";
     private readonly DeviceDatabase _database;
 
     public DeviceSettings(DeviceDatabase database)
@@ -23,6 +27,22 @@ public sealed class DeviceSettings
     }
 
     public void SetMode(SyncContext mode) => Set(ModeKey, mode.ToString());
+
+    /// <summary>Opaque cursor from the last successful `/sync` response, or null before the
+    /// first successful sync.</summary>
+    public string? GetSyncCursor() => Get(SyncCursorKey);
+
+    public void SetSyncCursor(string cursor) => Set(SyncCursorKey, cursor);
+
+    /// <summary>When the last successful `/sync` call completed, or null if this device has
+    /// never synced. Drives the footer's "SYNCED HH:MM" text.</summary>
+    public DateTimeOffset? GetLastSyncedAt()
+    {
+        string? value = Get(LastSyncedAtKey);
+        return value is not null && DateTimeOffset.TryParse(value, out var at) ? at : null;
+    }
+
+    public void SetLastSyncedAt(DateTimeOffset at) => Set(LastSyncedAtKey, at.ToString("O"));
 
     private string? Get(string key)
     {

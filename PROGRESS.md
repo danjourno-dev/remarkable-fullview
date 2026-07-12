@@ -20,15 +20,22 @@ device over WiFi: "HELLO DAN" and the border rendered correctly, right way
 up, first try — see "Next up" for the full writeup. Stage 4 (local-first
 device app) is next.
 
-**Stage 4 — Local-first device app — code complete, Checkpoint 4.1 pending.**
-Session 8 built the SQLite store + migrations, all six rendering screens
-with region-map hit-testing, the Now/Next strip's mode toggle, evdev
-tap-to-complete, edge navigation, seed data for both contexts, the
-`Program.cs` main loop, and a systemd unit. All builds/tests/format green
-on the dev machine — **not yet run on the device.** Checkpoint 4.1 ("Dan
-lives with the seeded board for a day") is the human step still needed to
-close Stage 4. Session 9 reworked the UI to match `docs/mockup-v4.png`
-(see below) before that checkpoint runs — still pending.
+**Stage 4 — Local-first device app — done.** Session 8 built the SQLite
+store + migrations, all six rendering screens with region-map hit-testing,
+the Now/Next strip's mode toggle, evdev tap-to-complete, edge navigation,
+and seed data for both contexts. Session 9 reworked the UI to match
+`docs/mockup-v4.png`; Session 10 fixed two visual-QA bugs; Session 11
+migrated the launcher to AppLoad/qtfb. Checkpoint 4.1 passed on device.
+Remaining performance polish is deferred to a later session rather than
+blocking Stage 5.
+
+**Stage 5 — Device sync engine — code complete, Checkpoint 5.1 pending.**
+Session 12 built outbox drain + delta apply against `/sync`, the
+`fullview-sync.timer` systemd unit for headless background sync, and the
+footer's tappable "synced HH:MM · n pending" status (see Session 12 log and
+Decisions below). All builds/tests/format green on the dev machine — **not
+yet run on the device.** Checkpoint 5.1 (kill-WiFi test) is the human step
+still needed to close Stage 5.
 
 ## Session log
 
@@ -700,6 +707,35 @@ close Stage 4. Session 9 reworked the UI to match `docs/mockup-v4.png`
   rasterization into a cache lookup + blit — the actual bottleneck on the
   rM1's CPU. Revisit only if a specific rendered pair looks visibly wrong
   on device.
+- **Stage 5 — three fixed sync trigger points, no background ticker.**
+  Rejected a `SyncTicker` thread with its own backoff loop inside the
+  foreground app, in favor of: startup sync (always attempted, short
+  timeout, failure just leaves the cache stale rather than blocking the
+  UI), a manual tap on the footer's sync status, and a headless systemd
+  timer for periodic background drain. Simpler to reason about than a
+  long-lived background thread sharing the SQLite connection with the
+  render loop, and matches Dan's explicit requirement that the periodic
+  timer shouldn't touch the network at all unless the outbox is non-empty.
+- **Stage 5 — systemd is back, scoped to a oneshot headless mode.**
+  `fullview-sync.service`/`.timer` run the same binary with
+  `FULLVIEW_MODE=sync-once`, which returns before opening `/dev/fb0`,
+  qtfb, or evdev — unlike the deleted `fullview-device.service` (Session
+  11), this can never contend with AppLoad for the framebuffer, so
+  reintroducing systemd here doesn't reopen that problem.
+- **Stage 5 — WAL + `busy_timeout` instead of a cross-process lock file.**
+  The headless `sync-once` process and the foreground app can both hold
+  `fullview.db` open at once (the timer can fire while the app is open).
+  WAL journal mode lets readers and a writer coexist instead of failing on
+  `SQLITE_BUSY`; a 5s `busy_timeout` covers writer-vs-writer contention by
+  retrying instead of throwing. Simpler than adding an app-level lock file
+  or IPC between the two processes.
+- **Stage 5 — footer hint text replaced, not appended.** The "HW BUTTON =
+  SWITCH MODE" hint became the tappable "synced HH:MM · n pending" status
+  (Dan's choice) rather than adding a second line — keeps the footer's
+  height and the render diff/cache-key logic unchanged.
+- **Stage 5 — `/sync` still has no auth.** Unchanged from the Stage 2
+  decision (see above); `SyncClient` sends no auth header. Out of scope
+  for Stage 5.
 
 ## Known issues / blockers
 
@@ -795,3 +831,191 @@ close Stage 4. Session 9 reworked the UI to match `docs/mockup-v4.png`
   layout gaps the same way. Checkpoint 4.1 (real device) is still the
   final gate before Stage 4 is closed, but doing another round or two of
   dev-machine visual QA first will surface cheaper fixes before that trip.
+
+### 2026-07-12 — Session 11 (AppLoad launcher migration)
+
+- Dan had been hand-launching the app over SSH, which fights `xochitl` for
+  both the framebuffer and the input devices. Preflight over SSH confirmed
+  AppLoad (asivery/rm-appload) and its qt-resource-rebuilder dependency are
+  already installed under `/home/root/xovi/` and **do run on this rM1**
+  (README's `aspectRatio: "original"` explicitly covers rM1/rM2/rMPP) —
+  `/home/root/xovi/exthome/appload/` didn't exist yet (no apps installed),
+  and `fullview-device.service` had never actually been deployed
+  (`not-found`/`inactive`), though a stray hand-launched process was running.
+- Rather than ship a raw-fb0 `qtfb: false` staging step, Dan chose to
+  implement a real qtfb client first, so the app renders into AppLoad's
+  shared surface instead of fighting xochitl for `/dev/fb0`. Built from
+  reading AppLoad's own source (`src/qtfb/`): an `IScreen` abstraction
+  (`FramebufferDevice` and the new `QtfbScreen` both implement it),
+  `QtfbScreen` (Native/`Qtfb.cs` P/Invoke — AF_UNIX SOCK_SEQPACKET socket at
+  `/tmp/qtfb.sock`, 24-byte messages, shared-memory RGB565 surface at
+  `/dev/shm/qtfb_<key>`), and `QtfbInputSource` (reads MESSAGE_USERINPUT off
+  the same connection, already in screen pixel coordinates — no
+  767x1023 rescale or 180° flip like the raw digitizer needs).
+  `Program.cs` picks the qtfb path when `QTFB_KEY` is set (i.e. launched by
+  AppLoad) and falls back to the original `FramebufferDevice` + evdev path
+  otherwise (hand-launch over SSH still works for local debugging).
+  Extracted the gray8→RGB565 lookup table into `Rgb565.cs`, shared by both
+  screens (previously private to `FramebufferDevice`).
+- Deleted `tools/device/fullview-device.service`: an auto-restarting
+  background service that owns the framebuffer is fundamentally incompatible
+  with a launcher-managed app. Rewrote `deploy-over-ssh.sh` to install into
+  `/home/root/xovi/exthome/appload/fullview/` (AppLoad id
+  `external::fullview`) instead of `/home/root/fullview-device-dir`, disabling
+  any leftover systemd unit first. Added
+  `tools/device/appload/external.manifest.json` (`qtfb: true,
+  disablesWindowedMode: true, aspectRatio: "original"`) and a generated "FV"
+  monogram placeholder `icon.png`. Updated `docs/device-setup.md` to match.
+- All three CI commands green (build/test/format) with new tests for the
+  qtfb message encoding (`QtfbMessageTests`), the RGB565 table
+  (`Rgb565Tests`), and the input press/release → tap mapping
+  (`QtfbInputSourceTests`, using a scripted `Func<QtfbUserInput>` feed rather
+  than a live socket, since `dotnet test` runs on Windows and can't load
+  `libc`).
+- **Not yet run on the device.** Next: `publish-arm.sh` +
+  `deploy-over-ssh.sh`, launch "Fullview" from the AppLoad launcher, confirm
+  the board renders without overdraw/contention with xochitl, and — the key
+  open question — confirm xochitl actually forwards touch input to the qtfb
+  client on rM1 (tap a checkbox). If it doesn't, the documented fallback is
+  to keep reading evdev directly even under qtfb (render via qtfb, input via
+  evdev); the `IScreen`/input-source split supports mixing them. Whether
+  physical hardware buttons arrive as qtfb `INPUT_BTN_*` events at all is a
+  second, separate unknown — noted in `QtfbInputSource` but not resolved.
+
+### 2026-07-12 — Session 12 (Stage 5, device sync engine)
+
+- Dan confirmed Stage 4 is functionally done (performance polish deferred)
+  and to proceed to Stage 5. Built `SyncClient` (thin `POST /sync` wrapper,
+  no auth header — still out of scope per Stage 2's decision) and
+  `SyncEngine.SyncOnceAsync` (drain outbox → call `/sync` → apply the
+  returned delta with the same LWW rule as `DynamoSyncStore` → advance the
+  cursor and `LastSyncedAt`; a failed call leaves the outbox and cursor
+  untouched for the next trigger to retry).
+- Dropped the originally-planned `SyncTicker`/backoff/`ConnectivityProbe`
+  background-thread design after asking Dan how RTC-wake should work. His
+  answer set three concrete requirements that became the three sync
+  trigger points instead: (1) a headless systemd timer that only makes a
+  network call if the outbox has pending writes ("shouldn't read unless
+  it's already writing"), to save power; (2) the foreground app always
+  syncs fresh on open, so it catches up on anything changed elsewhere while
+  it was closed; (3) a manual sync affordance so Dan can force a sync on
+  demand. See Decisions below for how each landed.
+- Added WAL journal mode + `busy_timeout=5000` PRAGMAs to `DeviceDatabase.Open`
+  so the foreground app and a headless `sync-once` process can safely hold
+  the SQLite file open at the same time.
+- Reintroduced systemd — deliberately narrow this time. Unlike the deleted
+  `fullview-device.service` (always-on, owned the framebuffer, fought
+  AppLoad), `tools/device/systemd/fullview-sync.{service,timer}` runs the
+  binary in `FULLVIEW_MODE=sync-once`, which returns before ever opening
+  `/dev/fb0`/qtfb/evdev — it can't contend with the foreground app for
+  anything. `deploy-over-ssh.sh` now installs and enables the timer
+  (30 min interval, `WakeSystem=true`, `Persistent=true`) alongside its
+  existing disable of any leftover old service.
+- Footer layout: replaced the "HW BUTTON = SWITCH MODE" hint text with a
+  tappable "synced HH:MM · n pending" status (Dan's explicit choice over
+  alternatives) — `Footer.Render` now returns the status text's bounds so
+  `BoardRenderer` can register a `BoardAction.SyncNow` hit region over it,
+  giving the manual-sync affordance from requirement (3) above.
+- All three CI commands green (build/test/format) with new tests:
+  `SyncEngineTests` (success drain, failed call leaves outbox/cursor
+  untouched, empty-outbox-still-applies-delta, LWW-remote-older-doesn't-
+  overwrite) using an inline fake `HttpMessageHandler`; new `DeviceStore`
+  tests for `ReadOutbox`/`OutboxCount`/`DeleteOutboxThrough`/
+  `ApplyRemoteDelta` (both LWW directions); new `DeviceSettings` tests for
+  the sync-cursor/last-synced-at getters/setters.
+- **Not yet run on the device.** Next: `publish-arm.sh` +
+  `deploy-over-ssh.sh` (creating `/etc/fullview-sync.env` on the device
+  first — see `docs/device-setup.md`), then Checkpoint 5.1 — tick items
+  offline, kill WiFi, confirm the outbox queues; restore WiFi, confirm the
+  timer (or a manual sync tap) drains it and the web/API side converges.
+
+### 2026-07-12 — Session 13 (fullview-sync.service TLS bug)
+
+- After deploying Session 12's sync engine, `fullview-sync.service` failed
+  every run (`journalctl`) with
+  `AuthenticationException: NotTimeValid` on the `POST /sync` TLS handshake
+  against `https://vqnmcbnti3.execute-api.eu-west-2.amazonaws.com`.
+  Systematically ruled out, in order: device clock/RTC (correct, NTP
+  synced, booted 19h earlier — no boot-time race), an expired
+  `Baltimore_CyberTrust_Root.pem` in `/etc/ssl/certs` (real, but unrelated
+  — not part of AWS's chain), stale `FULLVIEW_API_BASE_URL` config
+  (matched exactly), AWS-side edge cert propagation lag (ruled out —
+  100% reproducible across 4+ attempts, not transient), a custom cert
+  pinning bug in `SyncClient` (none exists, plain `HttpClient`), a stale
+  on-disk AIA cert cache under `~/.dotnet/corefx/...` (none found),
+  forcing `SSL_CERT_DIR=/etc/ssl/certs` to match what `openssl s_client`
+  uses (no effect), and `PublishReadyToRun` R2R-compiled crypto interop on
+  32-bit armhf (rebuilt with `-p:PublishReadyToRun=false`, still failed —
+  reverted).
+- **Root cause found via a temporary `ServerCertificateCustomValidationCallback`
+  diagnostic** (`FULLVIEW_TLS_DEBUG=1`, since removed/replaced — see
+  below): every certificate in the chain, including the 2015-issued
+  Amazon root, failed with chain status `NotTimeValid` /
+  `"format error in certificate's notBefore field"` — OpenSSL's literal
+  `X509_V_ERR_ERROR_IN_CERT_NOT_BEFORE_FIELD`, a *native ASN.1 parse
+  failure*, not an actual date-range failure. .NET's own *managed*
+  `X509Certificate2.NotBefore`/`NotAfter` properties parsed every cert
+  correctly in the same run. Conclusion: the device's system
+  `libssl.so.3`/`libcrypto.so.3` (OpenSSL 3.2.6, armv7l) has a native
+  `time_t`-handling bug in its cert-chain time check — likely a 32-bit ARM
+  `time_t` ABI mismatch from the glibc Y2038 64-bit `time_t` transition —
+  that corrupts `ASN1_TIME_to_tm` for every cert regardless of validity.
+  `openssl s_client` against the same host at the same moment validates
+  fine, which is presumably a differently-linked/built binary on this
+  image. Not something we can patch from the app side (device's system
+  OpenSSL, not ours to rebuild).
+- **Fix**: `SyncClient`'s `HttpClient` (`Program.cs`,
+  `CreateHttpHandler()`) now sets a permanent
+  `ServerCertificateCustomValidationCallback`. On
+  `SslPolicyErrors.RemoteCertificateChainErrors`, it only overrides the
+  failure when *every* chain element's *only* reported status is
+  `NotTimeValid`, and independently re-checks each cert's validity window
+  using the correctly-parsed managed `NotBefore`/`NotAfter` against
+  `DateTimeOffset.UtcNow`. Any other error (untrusted root, revoked,
+  tampering, hostname mismatch, or `NotTimeValid` alongside something
+  else) still fails closed exactly as before. `FULLVIEW_TLS_DEBUG=1` is
+  kept as a permanent opt-in diagnostic flag (logs the override decision)
+  for future TLS troubleshooting. Confirmed fixed on-device:
+  `sync-once: Succeeded.`
+- `tools/device/publish-arm.sh` gained a stray comment during the
+  `PublishReadyToRun=false` experiment; reverted cleanly back to `true`
+  (confirmed not the cause) with no leftover diff.
+- Changes staged, not committed — Dan reviews and commits manually per
+  standing instruction.
+
+### 2026-07-12 — Session 14 (API Gateway authentication)
+
+- Implemented the single-user v1 auth model the plan already called for
+  (Part A: "API key in device/web config from SSM Parameter Store. Cognito
+  is v2."): a REQUEST authorizer (`AuthorizerFunction`, new in
+  `Fullview.Api/Functions`) on the HTTP API checks an `x-api-key` header
+  against a shared secret in SSM Parameter Store (`GetParameter` with
+  `WithDecryption=true`, compared with `CryptographicOperations.FixedTimeEquals`),
+  cached for the lifetime of the warm Lambda instance. `FullviewStack` wires
+  it up as a `CfnAuthorizer` (REQUEST, payload v2, simple responses,
+  300s result TTL) on `POST /sync` only — `/health` stays open as a plain
+  liveness probe, no sensitive data.
+- CloudFormation can't create `SecureString` SSM parameters, so the stack
+  never creates the parameter itself — only grants the authorizer Lambda
+  `ssm:GetParameter` (scoped to the specific parameter ARN) and
+  `kms:Decrypt` (scoped via `kms:ViaService` since the AWS-managed
+  `alias/aws/ssm` key's actual key id isn't known at synth time). Dan
+  creates the parameter once by hand (`aws ssm put-parameter ... --type
+  SecureString`) — documented as a manual step in `docs/device-setup.md`'s
+  new "API authentication" section, consistent with the plan's rule that
+  console/CLI-only steps are fine when the plan explicitly calls for them.
+- Device side: `Program.cs` reads `FULLVIEW_API_KEY` and attaches it as
+  `x-api-key` on both `HttpClient`s (`AddApiKeyHeader`). No special error
+  handling needed — a 401 throws `HttpRequestException` same as any other
+  HTTP failure, which `SyncEngine.SyncOnceAsync` already treats as a
+  no-op-and-retry-later failure.
+- Fixed a latent gap while touching this: `run.sh` (AppLoad's launch
+  target) never sourced `/etc/fullview-sync.env`, so the *foreground* app's
+  startup/manual sync never actually had `FULLVIEW_API_BASE_URL` /
+  `FULLVIEW_DEVICE_ID` set — only the systemd timer did. `run.sh` now
+  sources the same env file before exec'ing the binary, so one file
+  configures both paths, including the new `FULLVIEW_API_KEY`.
+- Fullview.Web has no client yet (Stage 6+), so nothing to update there —
+  whatever calls `/sync` from the web app later just needs the same header.
+- Changes staged, not committed — Dan reviews and commits manually per
+  standing instruction.

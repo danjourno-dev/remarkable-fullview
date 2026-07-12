@@ -1,0 +1,15 @@
+[Unit]
+Description=Fullview one-shot outbox sync (headless, no framebuffer)
+# Never fight AppLoad for /dev/fb0 or qtfb: this unit only ever runs the app in
+# FULLVIEW_MODE=sync-once, which exits before touching the screen or evdev (see
+# Program.cs). It's safe to run whether or not the AppLoad-launched foreground app
+# is open, unlike the old always-on fullview-device.service this replaces.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=FULLVIEW_MODE=sync-once
+EnvironmentFile=-/etc/fullview-sync.env
+ExecStart=__APP_DIR__/Fullview.Device
+WorkingDirectory=__APP_DIR__

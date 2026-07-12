@@ -1,0 +1,19 @@
+[Unit]
+Description=Periodically drain the Fullview outbox in the background
+
+[Timer]
+# 30 min: infrequent enough to leave the RTC/radio alone most of the time (this
+# is a device with a battery to protect), frequent enough that "kill WiFi, tick
+# offline, restore WiFi" (Checkpoint 5.1) converges within a coffee break. The
+# service itself no-ops without touching the network if there's nothing queued
+# to push (see Program.cs's sync-once branch), so most firings cost nothing.
+OnBootSec=5min
+OnUnitActiveSec=30min
+# Wake the device from suspend for this timer, and if a firing was missed while
+# suspended past its window, run it once on resume instead of waiting a full
+# cycle for the next one.
+WakeSystem=true
+Persistent=true
+
+[Install]
+WantedBy=timers.target

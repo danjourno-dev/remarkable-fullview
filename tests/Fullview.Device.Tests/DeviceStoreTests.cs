@@ -122,4 +122,90 @@ public class DeviceStoreTests : IDisposable
 
         Assert.Null(exception);
     }
+
+    [Fact]
+    public void ReadOutbox_ReturnsRowsOldestFirst()
+    {
+        _store.Save(MakeTodo("t1", "First"));
+        _store.Save(MakeTodo("t2", "Second"));
+
+        var outbox = _store.ReadOutbox();
+
+        Assert.Equal(2, outbox.Count);
+        Assert.Equal("t1", outbox[0].Entity.Id);
+        Assert.Equal("t2", outbox[1].Entity.Id);
+        Assert.True(outbox[0].Seq < outbox[1].Seq);
+    }
+
+    [Fact]
+    public void OutboxCount_ReflectsQueuedRows()
+    {
+        Assert.Equal(0, _store.OutboxCount());
+
+        _store.Save(MakeTodo("t1", "First"));
+        _store.Save(MakeTodo("t2", "Second"));
+
+        Assert.Equal(2, _store.OutboxCount());
+    }
+
+    [Fact]
+    public void DeleteOutboxThrough_RemovesOnlyRowsUpToMaxSeq()
+    {
+        _store.Save(MakeTodo("t1", "First"));
+        var outbox = _store.ReadOutbox();
+        _store.Save(MakeTodo("t2", "Second"));
+
+        _store.DeleteOutboxThrough(outbox[0].Seq);
+
+        var remaining = _store.ReadOutbox();
+        var remainingEntity = Assert.Single(remaining);
+        Assert.Equal("t2", remainingEntity.Entity.Id);
+    }
+
+    [Fact]
+    public void ApplyRemoteDelta_NewEntity_InsertsIt()
+    {
+        _store.ApplyRemoteDelta(new[] { MakeTodo("t1", "From server") });
+
+        var todo = Assert.Single(_store.Query<Todo>());
+        Assert.Equal("From server", todo.Title);
+    }
+
+    [Fact]
+    public void ApplyRemoteDelta_RemoteNewerThanLocal_Overwrites()
+    {
+        var local = MakeTodo("t1", "Local title");
+        local.UpdatedAt = DateTimeOffset.UtcNow;
+        _store.SaveSeed(local);
+
+        var remote = MakeTodo("t1", "Remote title");
+        remote.UpdatedAt = local.UpdatedAt.AddMinutes(1);
+        _store.ApplyRemoteDelta(new[] { remote });
+
+        var todo = Assert.Single(_store.Query<Todo>());
+        Assert.Equal("Remote title", todo.Title);
+    }
+
+    [Fact]
+    public void ApplyRemoteDelta_RemoteOlderThanLocal_DoesNotOverwrite()
+    {
+        var local = MakeTodo("t1", "Local title");
+        local.UpdatedAt = DateTimeOffset.UtcNow;
+        _store.SaveSeed(local);
+
+        var remote = MakeTodo("t1", "Remote title");
+        remote.UpdatedAt = local.UpdatedAt.AddMinutes(-1);
+        _store.ApplyRemoteDelta(new[] { remote });
+
+        var todo = Assert.Single(_store.Query<Todo>());
+        Assert.Equal("Local title", todo.Title);
+    }
+
+    [Fact]
+    public void ApplyRemoteDelta_DoesNotQueueAnOutboxRow()
+    {
+        _store.ApplyRemoteDelta(new[] { MakeTodo("t1", "From server") });
+
+        Assert.Equal(0, _store.OutboxCount());
+    }
 }

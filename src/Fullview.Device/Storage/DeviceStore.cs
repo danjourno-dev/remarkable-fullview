@@ -91,6 +91,80 @@ public sealed class DeviceStore
         Save(todo);
     }
 
+    /// <summary>All queued outbox rows, oldest first, for Stage 5's sync drain. The seq is
+    /// needed by <see cref="DeleteOutboxThrough"/> so a drain only removes what it actually
+    /// sent, not rows queued mid-call by a concurrent write.</summary>
+    public IReadOnlyList<(long Seq, SyncEntity Entity)> ReadOutbox()
+    {
+        using var command = _database.Connection.CreateCommand();
+        command.CommandText = "SELECT seq, payload FROM outbox ORDER BY seq;";
+
+        var results = new List<(long, SyncEntity)>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var entity = JsonSerializer.Deserialize<SyncEntity>(reader.GetString(1), DeviceJson.Options);
+            if (entity is not null)
+            {
+                results.Add((reader.GetInt64(0), entity));
+            }
+        }
+
+        return results;
+    }
+
+    public int OutboxCount()
+    {
+        using var command = _database.Connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM outbox;";
+        return (int)(long)command.ExecuteScalar()!;
+    }
+
+    /// <summary>Removes outbox rows up to and including <paramref name="maxSeq"/> — called
+    /// after a successful sync drain with the seq of the last row that was actually sent.</summary>
+    public void DeleteOutboxThrough(long maxSeq)
+    {
+        using var command = _database.Connection.CreateCommand();
+        command.CommandText = "DELETE FROM outbox WHERE seq <= $maxSeq;";
+        command.Parameters.AddWithValue("$maxSeq", maxSeq);
+        command.ExecuteNonQuery();
+    }
+
+    /// <summary>Applies a `/sync` response's delta with the same last-write-wins rule as the
+    /// server (B5): a pulled row only overwrites the local copy if it isn't older. Bypasses
+    /// the outbox — these are remote writes, not local mutations to push back out.</summary>
+    public void ApplyRemoteDelta(IReadOnlyList<SyncEntity> delta)
+    {
+        if (delta.Count == 0)
+        {
+            return;
+        }
+
+        using var transaction = _database.Connection.BeginTransaction();
+        foreach (var entity in delta)
+        {
+            if (GetExistingUpdatedAt(transaction, entity) is { } existing && existing > entity.UpdatedAt)
+            {
+                continue;
+            }
+
+            string json = JsonSerializer.Serialize(entity, DeviceJson.Options);
+            UpsertEntityRow(transaction, entity, json);
+        }
+
+        transaction.Commit();
+    }
+
+    private DateTimeOffset? GetExistingUpdatedAt(SqliteTransaction transaction, SyncEntity entity)
+    {
+        using var command = _database.Connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT updated_at FROM entities WHERE entity_type = $type AND id = $id;";
+        command.Parameters.AddWithValue("$type", entity.EntityType);
+        command.Parameters.AddWithValue("$id", entity.Id);
+        return command.ExecuteScalar() is string value ? DateTimeOffset.Parse(value) : null;
+    }
+
     public void ToggleShoppingItemChecked(string itemId, string deviceId)
     {
         var item = Query<ShoppingItem>().FirstOrDefault(i => i.Id == itemId);

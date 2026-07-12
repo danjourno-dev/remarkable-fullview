@@ -59,7 +59,7 @@ public static class BoardRenderer
         return state.CurrentScreen switch
         {
             ScreenKind.Today => TodayScreen.Render(width, height, BuildTodayData(state, today)),
-            ScreenKind.Agenda => AgendaScreen.Render(width, height, FilterByContext(state.AgendaEvents, mode)),
+            ScreenKind.Agenda => AgendaScreen.Render(width, height, TodayAgenda(state, today), state.Now),
             ScreenKind.Meals => MealsScreen.Render(width, height, Active(state.Meals), RecipesById(state)),
             ScreenKind.Recipe => RenderRecipe(width, height, state),
             _ => throw new ArgumentOutOfRangeException(nameof(state), state.CurrentScreen, "Unknown screen kind.")
@@ -79,11 +79,14 @@ public static class BoardRenderer
         return RecipeScreen.Render(width, height, recipe);
     }
 
-    private static TodayScreenData BuildTodayData(BoardState state, DateOnly today)
-    {
-        var todayAgenda = FilterByContext(state.AgendaEvents, state.Mode)
+    private static IReadOnlyList<AgendaEvent> TodayAgenda(BoardState state, DateOnly today) =>
+        FilterByContext(state.AgendaEvents, state.Mode)
             .Where(e => DateOnly.FromDateTime(e.Start.LocalDateTime) == today)
             .ToList();
+
+    private static TodayScreenData BuildTodayData(BoardState state, DateOnly today)
+    {
+        var todayAgenda = TodayAgenda(state, today);
 
         var activeTodos = Active(state.Todos);
 

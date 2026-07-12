@@ -60,7 +60,7 @@ public sealed class CalendarPullFunction
 
     private static async Task<IReadOnlyList<CalendarConfig>> FetchCalendarsAsync()
     {
-        var json = await FetchParameterAsync(CalendarsParam, withDecryption: false);
+        var json = await FetchParameterAsync(CalendarsParam, withDecryption: true);
         try
         {
             return JsonSerializer.Deserialize<List<CalendarConfig>>(json, CalendarConfigJson)

@@ -5,6 +5,8 @@ using Amazon.CDK.AWS.CloudFront.Origins;
 using Amazon.CDK.AWS.CloudWatch;
 using Amazon.CDK.AWS.CloudWatch.Actions;
 using Amazon.CDK.AWS.DynamoDB;
+using Amazon.CDK.AWS.Events;
+using Amazon.CDK.AWS.Events.Targets;
 using Amazon.CDK.AWS.Lambda;
 using Amazon.CDK.AWS.S3;
 using Amazon.CDK.AWS.SNS;
@@ -137,6 +139,66 @@ public sealed class FullviewStack : Stack
                 ["StringEquals"] = new Dictionary<string, object> { ["kms:ViaService"] = $"ssm.{Region}.amazonaws.com" }
             }
         }));
+
+        // Stage 6.5: Google Calendar puller. One EventBridge-scheduled Lambda sweeps every
+        // calendar in the config list — no work-specific code path, Context comes only from
+        // that config (see docs/plans/implementation.md's Stage 6.5 design rule). All three
+        // parameters below are created by hand (checkpoints 6.5.1/6.5.2), same reasoning as
+        // the API key above: CloudFormation can't create SecureString parameters, and the
+        // calendar list is deliberately a config change, not a code change, so this stack
+        // never seeds it either.
+        var googleOAuthClientParamName = $"/{settings.ResourcePrefix}google-oauth-client";
+        var googleRefreshTokenParamName = $"/{settings.ResourcePrefix}google-refresh-token";
+        var googleCalendarsParamName = $"/{settings.ResourcePrefix}google-calendars";
+
+        var calendarPullFunction = new Function(this, "CalendarPullFunction", new FunctionProps
+        {
+            FunctionName = $"{settings.ResourcePrefix}calendar-pull",
+            Runtime = Runtime.DOTNET_8,
+            Handler = "Fullview.Api::Fullview.Api.Functions.CalendarPullFunction::FunctionHandler",
+            Code = Code.FromAsset(ResolveLambdaAsset()),
+            MemorySize = 256,
+            // Google's API can be slow across many calendars/pages; the default 3s
+            // API Gateway-oriented timeout used by the other functions doesn't apply here
+            // since nothing waits on this one synchronously.
+            Timeout = Duration.Seconds(60),
+            Environment = new Dictionary<string, string>
+            {
+                ["FULLVIEW_TABLE_NAME"] = table.TableName,
+                ["FULLVIEW_GOOGLE_OAUTH_CLIENT_PARAM"] = googleOAuthClientParamName,
+                ["FULLVIEW_GOOGLE_REFRESH_TOKEN_PARAM"] = googleRefreshTokenParamName,
+                ["FULLVIEW_GOOGLE_CALENDARS_PARAM"] = googleCalendarsParamName
+            }
+        });
+        table.GrantReadWriteData(calendarPullFunction);
+
+        calendarPullFunction.AddToRolePolicy(new Amazon.CDK.AWS.IAM.PolicyStatement(new Amazon.CDK.AWS.IAM.PolicyStatementProps
+        {
+            Actions = new[] { "ssm:GetParameter" },
+            Resources = new[]
+            {
+                $"arn:aws:ssm:{Region}:{Account}:parameter{googleOAuthClientParamName}",
+                $"arn:aws:ssm:{Region}:{Account}:parameter{googleRefreshTokenParamName}",
+                $"arn:aws:ssm:{Region}:{Account}:parameter{googleCalendarsParamName}"
+            }
+        }));
+
+        calendarPullFunction.AddToRolePolicy(new Amazon.CDK.AWS.IAM.PolicyStatement(new Amazon.CDK.AWS.IAM.PolicyStatementProps
+        {
+            Actions = new[] { "kms:Decrypt" },
+            Resources = new[] { "*" },
+            Conditions = new Dictionary<string, object>
+            {
+                ["StringEquals"] = new Dictionary<string, object> { ["kms:ViaService"] = $"ssm.{Region}.amazonaws.com" }
+            }
+        }));
+
+        var calendarPullSchedule = new Rule(this, "CalendarPullSchedule", new RuleProps
+        {
+            RuleName = $"{settings.ResourcePrefix}calendar-pull",
+            Schedule = Schedule.Rate(Duration.Minutes(15))
+        });
+        calendarPullSchedule.AddTarget(new LambdaFunction(calendarPullFunction));
 
         // L1 (Cfn*) constructs throughout: the .NET binding for the HTTP API L2's Lambda
         // integration helper (Amazon.CDK.AWS.Apigatewayv2.Integrations) never went past a
@@ -350,6 +412,22 @@ public sealed class FullviewStack : Stack
             TreatMissingData = TreatMissingData.NOT_BREACHING
         });
         authorizerErrorAlarm.AddAlarmAction(new SnsAction(alertTopic));
+
+        var calendarPullErrorAlarm = new Alarm(this, "CalendarPullFunctionErrorAlarm", new AlarmProps
+        {
+            AlarmName = $"{settings.ResourcePrefix}calendar-pull-errors",
+            AlarmDescription = "Calendar pull Lambda errored — Google credentials, calendar config, or the API itself may need attention.",
+            Metric = calendarPullFunction.MetricErrors(new MetricOptions
+            {
+                Period = Duration.Minutes(15),
+                Statistic = Stats.SUM
+            }),
+            Threshold = 1,
+            EvaluationPeriods = 1,
+            ComparisonOperator = ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+            TreatMissingData = TreatMissingData.NOT_BREACHING
+        });
+        calendarPullErrorAlarm.AddAlarmAction(new SnsAction(alertTopic));
 
         _ = new CfnBudget(this, "MonthlyBudget", new CfnBudgetProps
         {

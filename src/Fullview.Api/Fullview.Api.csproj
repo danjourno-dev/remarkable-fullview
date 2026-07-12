@@ -17,6 +17,8 @@
     <PackageReference Include="Amazon.Lambda.Serialization.SystemTextJson" Version="2.4.3" />
     <PackageReference Include="AWSSDK.DynamoDBv2" Version="3.7.400.0" />
     <PackageReference Include="AWSSDK.SimpleSystemsManagement" Version="3.7.400.0" />
+    <PackageReference Include="Google.Apis.Calendar.v3" Version="1.68.0.3536" />
+    <PackageReference Include="Google.Apis.Auth" Version="1.68.0" />
   </ItemGroup>
 
 </Project>

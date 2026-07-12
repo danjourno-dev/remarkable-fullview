@@ -18,6 +18,7 @@ export function subscribe(listener: () => void): () => void {
 }
 
 function notify(): void {
+  snapshotCache.clear();
   for (const listener of listeners) listener();
 }
 
@@ -29,6 +30,19 @@ function readJson<T>(key: string, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+/** Caches derived snapshots (e.g. per entityType) so useSyncExternalStore's getSnapshot
+ * returns a referentially stable value when nothing has changed — without this, a fresh
+ * array/object on every call makes React think the store changed on every render, which
+ * triggers an infinite render loop (React error #185). Cleared whenever the store notifies. */
+const snapshotCache = new Map<string, unknown>();
+
+function cached<T>(cacheKey: string, compute: () => T): T {
+  if (!snapshotCache.has(cacheKey)) {
+    snapshotCache.set(cacheKey, compute());
+  }
+  return snapshotCache.get(cacheKey) as T;
 }
 
 function writeJson(key: string, value: unknown): void {
@@ -65,7 +79,7 @@ export function setLastSyncedAt(iso: string): void {
 }
 
 export function getEntities(): Record<string, Entity> {
-  return readJson<Record<string, Entity>>(ENTITIES_KEY, {});
+  return cached(ENTITIES_KEY, () => readJson<Record<string, Entity>>(ENTITIES_KEY, {}));
 }
 
 function setEntities(entities: Record<string, Entity>): void {
@@ -122,7 +136,9 @@ export function clearOutboxThrough(ids: Set<string>): void {
 export function listEntities<T extends Entity>(
   entityType: T["entityType"],
 ): T[] {
-  return Object.values(getEntities()).filter(
-    (e): e is T => e.entityType === entityType && !e.deleted,
+  return cached(`${ENTITIES_KEY}:${entityType}`, () =>
+    Object.values(getEntities()).filter(
+      (e): e is T => e.entityType === entityType && !e.deleted,
+    ),
   );
 }

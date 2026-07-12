@@ -179,3 +179,11 @@ A forker deploying their own stack under a different `ResourcePrefix` uses
 `/<their-prefix>api-key` instead — the authorizer Lambda's
 `FULLVIEW_API_KEY_PARAM` environment variable (set by the CDK stack) always
 points at the right name for that deployment.
+
+**Fullview.Web (Stage 6)** bakes the same key into its browser bundle at
+build time (`VITE_API_KEY`) — see Fullview.Web/README.md for why that's an
+accepted v1 tradeoff (single user, Cognito is v2). Locally, put it in
+`src/Fullview.Web/.env.local` (gitignored). In CI, `cd-web.yml` reads it from
+the **`FULLVIEW_API_KEY` GitHub Actions secret** (Settings → Secrets and
+variables → Actions → New repository secret) — set it to the same value as
+the SSM parameter above.

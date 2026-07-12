@@ -1,0 +1,90 @@
+# CD pipeline for Fullview.Web — separate from cd-infra.yml so a web-only change (a new
+# screen, a copy tweak) doesn't need a full `cdk deploy`. The S3 bucket and CloudFront
+# distribution it deploys into are provisioned by FullviewStack (cd-infra.yml); this
+# workflow only ever reads that stack's outputs, via the same OIDC role.
+
+name: CD Web
+
+on:
+  pull_request:
+    paths:
+      - "src/Fullview.Web/**"
+      - ".github/workflows/cd-web.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/Fullview.Web/**"
+      - ".github/workflows/cd-web.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/Fullview.Web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - run: npm ci
+      - run: npx tsc -b
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    defaults:
+      run:
+        working-directory: src/Fullview.Web
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - run: npm ci
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: eu-west-2
+
+      - name: Read FullviewStack outputs
+        id: stack
+        run: |
+          bucket=$(aws cloudformation describe-stacks --stack-name fullview-stack \
+            --query "Stacks[0].Outputs[?OutputKey=='WebBucketName'].OutputValue" --output text)
+          distribution_id=$(aws cloudformation describe-stacks --stack-name fullview-stack \
+            --query "Stacks[0].Outputs[?OutputKey=='WebDistributionId'].OutputValue" --output text)
+          api_url=$(aws cloudformation describe-stacks --stack-name fullview-stack \
+            --query "Stacks[0].Outputs[?OutputKey=='HttpApiUrl'].OutputValue" --output text)
+          echo "bucket=$bucket" >> "$GITHUB_OUTPUT"
+          echo "distribution_id=$distribution_id" >> "$GITHUB_OUTPUT"
+          echo "api_url=$api_url" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        env:
+          VITE_API_BASE_URL: ${{ steps.stack.outputs.api_url }}
+          VITE_API_KEY: ${{ secrets.FULLVIEW_API_KEY }}
+        run: npm run build
+
+      - name: Sync to S3
+        run: aws s3 sync dist/ "s3://${{ steps.stack.outputs.bucket }}" --delete
+
+      - name: Invalidate CloudFront cache
+        run: aws cloudfront create-invalidation --distribution-id "${{ steps.stack.outputs.distribution_id }}" --paths "/*"

@@ -437,3 +437,6 @@ FodyWeavers.xsd
 appsettings.Development.json
 .env
 .env.local
+
+# Fullview.Web (Vite) build output
+src/Fullview.Web/dist/

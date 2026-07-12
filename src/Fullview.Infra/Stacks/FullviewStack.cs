@@ -1,6 +1,7 @@
 using Amazon.CDK;
 using Amazon.CDK.AWS.Apigatewayv2;
 using Amazon.CDK.AWS.Budgets;
+using Amazon.CDK.AWS.CloudFront.Origins;
 using Amazon.CDK.AWS.CloudWatch;
 using Amazon.CDK.AWS.CloudWatch.Actions;
 using Amazon.CDK.AWS.DynamoDB;
@@ -10,6 +11,7 @@ using Amazon.CDK.AWS.SNS;
 using Amazon.CDK.AWS.SNS.Subscriptions;
 using Constructs;
 using Fullview.Infra.Configuration;
+using CloudFront = Amazon.CDK.AWS.CloudFront;
 using DynamoAttribute = Amazon.CDK.AWS.DynamoDB.Attribute;
 
 namespace Fullview.Infra.Stacks;
@@ -139,10 +141,22 @@ public sealed class FullviewStack : Stack
         // L1 (Cfn*) constructs throughout: the .NET binding for the HTTP API L2's Lambda
         // integration helper (Amazon.CDK.AWS.Apigatewayv2.Integrations) never went past a
         // 2020-era alpha release, so it's not a viable dependency for a public repo template.
+        // Stage 6: Fullview.Web calls /sync directly from the browser (same shape as the
+        // device, per B5), so the HTTP API needs CORS. AllowOrigins is "*" rather than
+        // pinned to the CloudFront domain below because that domain isn't known until
+        // after this same stack's first deploy (chicken-and-egg) — acceptable here since
+        // the endpoint is protected by the x-api-key authorizer, not cookies/credentials.
         var httpApi = new CfnApi(this, "HttpApi", new CfnApiProps
         {
             Name = $"{settings.ResourcePrefix}api",
-            ProtocolType = "HTTP"
+            ProtocolType = "HTTP",
+            CorsConfiguration = new CfnApi.CorsProperty
+            {
+                AllowOrigins = new[] { "*" },
+                AllowMethods = new[] { "GET", "POST", "OPTIONS" },
+                AllowHeaders = new[] { "content-type", "x-api-key" },
+                MaxAge = 300
+            }
         });
 
         var healthIntegration = new CfnIntegration(this, "HealthIntegration", new CfnIntegrationProps
@@ -225,6 +239,68 @@ public sealed class FullviewStack : Stack
         {
             Value = $"https://{httpApi.Ref}.execute-api.{Region}.amazonaws.com",
             Description = "Base URL — append /health for the Stage 1 checkpoint"
+        });
+
+        // Stage 6: Fullview.Web static hosting. Private bucket, no static-website-hosting
+        // mode — CloudFront reaches it via Origin Access Control, never directly.
+        // `cd-web.yml` builds `dist/` and `aws s3 sync`s it here on every push to main that
+        // touches Fullview.Web; this stack only owns the bucket/distribution, not the
+        // deploy — that keeps a web-only change from needing a full `cdk deploy`.
+        var webBucket = new Bucket(this, "WebBucket", new BucketProps
+        {
+            BucketName = settings.AwsAccountId is not null
+                ? $"{settings.ResourcePrefix}web-{settings.AwsAccountId}-{settings.AwsRegion}"
+                : null,
+            BlockPublicAccess = BlockPublicAccess.BLOCK_ALL,
+            Encryption = BucketEncryption.S3_MANAGED,
+            RemovalPolicy = RemovalPolicy.RETAIN
+        });
+
+        var webDistribution = new CloudFront.Distribution(this, "WebDistribution", new CloudFront.DistributionProps
+        {
+            Comment = $"{settings.ResourcePrefix}web",
+            DefaultRootObject = "index.html",
+            DefaultBehavior = new CloudFront.BehaviorOptions
+            {
+                Origin = S3BucketOrigin.WithOriginAccessControl(webBucket),
+                ViewerProtocolPolicy = CloudFront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS
+            },
+            // react-router uses browser history, not hash routing — CloudFront must serve
+            // index.html for any path (S3 itself 403s/404s on unknown keys) so a deep-link
+            // or refresh on e.g. /recipes doesn't break.
+            ErrorResponses = new[]
+            {
+                new CloudFront.ErrorResponse
+                {
+                    HttpStatus = 403,
+                    ResponseHttpStatus = 200,
+                    ResponsePagePath = "/index.html"
+                },
+                new CloudFront.ErrorResponse
+                {
+                    HttpStatus = 404,
+                    ResponseHttpStatus = 200,
+                    ResponsePagePath = "/index.html"
+                }
+            }
+        });
+
+        _ = new CfnOutput(this, "WebBucketName", new CfnOutputProps
+        {
+            Value = webBucket.BucketName,
+            Description = "cd-web.yml syncs Fullview.Web's dist/ here"
+        });
+
+        _ = new CfnOutput(this, "WebDistributionId", new CfnOutputProps
+        {
+            Value = webDistribution.DistributionId,
+            Description = "cd-web.yml invalidates this distribution's cache after each sync"
+        });
+
+        _ = new CfnOutput(this, "WebUrl", new CfnOutputProps
+        {
+            Value = $"https://{webDistribution.DistributionDomainName}",
+            Description = "Fullview.Web — set as VITE_API_BASE_URL's counterpart in the SPA's own config"
         });
 
         var errorAlarm = new Alarm(this, "HealthFunctionErrorAlarm", new AlarmProps

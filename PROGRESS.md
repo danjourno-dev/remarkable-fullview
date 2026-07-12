@@ -1019,3 +1019,99 @@ still needed to close Stage 5.
   whatever calls `/sync` from the web app later just needs the same header.
 - Changes staged, not committed — Dan reviews and commits manually per
   standing instruction.
+
+### 2026-07-12 — Session 15 (Stage 6, web app)
+
+- Scaffolded `Fullview.Web` as a Vite + React + TypeScript SPA. Vite's own
+  scaffolder (`npm create vite@latest`) defaulted to **Vite 8, which bundles
+  via `rolldown` instead of esbuild/rollup** — its native binding failed to
+  load at all in this environment (`ERR_REQUIRE_ESM` from a transitive dep,
+  plus a separate missing-native-binding error from `oxlint`, both matching
+  a known npm optional-dependency resolution bug,
+  https://github.com/npm/cli/issues/4828). Downgraded to **Vite 7.3.6 +
+  `@vitejs/plugin-react` 4.7.0** (the mature esbuild/rollup line) and pinned
+  **jsdom to 25.0.1** (the version installed by default, 29.x, had its own
+  ESM/CJS interop bug breaking `vitest`'s jsdom environment). A clean
+  `node_modules`/`package-lock.json` reinstall then explicitly adding
+  `@oxlint/binding-win32-x64-msvc` as a devDependency fixed oxlint. All of
+  build/typecheck/lint/test are green now; CI runs on `ubuntu-latest` so
+  this Windows-specific binding issue shouldn't recur there, but if it does
+  the fix is the same (explicit platform binding package, or reinstall).
+- **TypeScript `enum` doesn't work under this tsconfig** — `tsconfig.app.json`
+  sets `erasableSyntaxOnly` (real `enum`/constructor-parameter-properties
+  aren't type-erasable), which Vite's scaffold enables by default. Domain
+  enums (`SyncContext`, `TodoPriority`, etc., in `lib/types.ts`) are `as
+  const` objects + a derived literal-union type instead — same call-site
+  shape, no runtime enum object. `SyncClient` uses explicit constructor-body
+  field assignment instead of TS parameter properties for the same reason.
+- Built the whole client-side architecture as a browser-side mirror of the
+  device's sync engine (Session 12), not a REST CRUD client: `lib/types.ts`
+  mirrors every `Fullview.Domain.Entities` class field-for-field, including
+  that **enums serialize as integers** (`SyncJson.Options` is plain
+  `JsonSerializerDefaults.Web`, no `JsonStringEnumConverter` — the C# enum
+  declaration order and the TS const-object values must be kept in lockstep
+  by hand, there's no shared-schema check between the two). `lib/store.ts`
+  is a localStorage-backed entities/outbox/cursor/deviceId store with the
+  same idempotent-outbox-replace and remote-wins-on-tie LWW rule as
+  `DeviceStore`/`DynamoSyncStore`; `lib/syncEngine.ts`'s `syncOnce` mirrors
+  `SyncEngine.SyncOnceAsync` exactly (drain outbox snapshot → POST /sync →
+  apply delta → advance cursor/lastSyncedAt → only clear the outbox on
+  success). React components read the store via `useSyncExternalStore`
+  (`lib/useStore.ts`) rather than polling, since localStorage writes don't
+  themselves trigger React re-renders.
+- Built all Stage 6 Build-bullet screens: `AppContext`
+  (Personal/Work/All mode switcher, "All" has no single entity context so
+  quick-add defaults new items to Personal per the plan), `QuickAdd`
+  (`chrono-node` natural-date parsing, strips the matched date substring out
+  of the title), Todos and Shopping (CRUD + complete/check toggling),
+  Meals (7-day × Breakfast/Dinner week grid, prev/next navigation, pick a
+  recipe or type a free-text description), Recipes (list + inline editor,
+  ingredients/steps as one-per-line textareas, "Add ingredients to
+  shopping" button), Inbox (read-only list — plan says "empty for now",
+  no filing UI since the capture flow that populates `InboxPage` rows
+  doesn't exist yet), and Status (device id, last synced, pending count,
+  manual sync button — same footer pattern as the device). `Header`'s
+  sync-status line and the Status page both read live state via the same
+  hooks.
+- **Test coverage focused on the LWW merge logic** (`lib/store.test.ts`,
+  7 cases: outbox replace-not-duplicate, remote-wins-on-tie, tombstone
+  convergence, selective outbox clearing) since that's the part most likely
+  to silently diverge from the device/API's own rules — no UI component
+  tests yet.
+- **Infra**: added CORS to the HTTP API (`AllowOrigins: ["*"]` — acceptable
+  since `/sync` is protected by the `x-api-key` authorizer, not cookies, and
+  the CloudFront domain isn't known until after the same stack's first
+  deploy anyway), a private `WebBucket` (OAC, no public bucket policy) and a
+  CloudFront `WebDistribution` (403/404 → `/index.html` 200, since
+  react-router uses browser history and CloudFront needs to serve
+  `index.html` for any deep-linked path). Hit a **namespace collision**
+  between `Amazon.CDK.AWS.CloudFront.Function`/`FunctionProps` and the
+  `Amazon.CDK.AWS.Lambda` ones already used throughout the file for the
+  Stage 1/2 Lambdas — resolved with a `using CloudFront =
+  Amazon.CDK.AWS.CloudFront;` alias rather than importing the namespace
+  unqualified. `cdk synth` (with dummy `FULLVIEW_ALERT_EMAIL`) succeeds
+  end-to-end.
+- **`.github/workflows/cd-web.yml`**: PR job runs
+  typecheck/lint/test/build; the `push`-to-`main` deploy job reuses the same
+  `AWS_DEPLOY_ROLE_ARN` OIDC role as `cd-infra.yml`, reads `WebBucketName`/
+  `WebDistributionId`/`HttpApiUrl` from the already-deployed `fullview-stack`
+  via `aws cloudformation describe-stacks` (rather than hardcoding them),
+  builds with `VITE_API_BASE_URL` set to that stack output and
+  `VITE_API_KEY` from a **new `FULLVIEW_API_KEY` GitHub Actions secret**
+  (documented in `docs/device-setup.md`'s API authentication section — same
+  value as the SSM parameter), then `aws s3 sync --delete` +
+  `aws cloudfront create-invalidation`. Whether the existing
+  `AWS_DEPLOY_ROLE_ARN` role's permissions actually cover S3 sync + the
+  CloudFront invalidation is untested — `cd-infra.yml`'s role only needed
+  CDK-deploy-shaped permissions before now.
+- **Not yet deployed or run for real.** All checks (`dotnet build/test/
+  format`, and `npm run build`/`lint`/`test`/`tsc -b` under
+  `src/Fullview.Web`) are green locally, and `cdk synth` succeeds, but
+  nothing has gone through an actual `cdk deploy` or `cd-web.yml` run yet.
+  Next session: Dan pushes this, watches `cd-infra.yml` provision the new
+  bucket/distribution/CORS and `cd-web.yml` do its first real deploy, adds
+  the `FULLVIEW_API_KEY` secret and `src/Fullview.Web/.env.local` for local
+  dev, then exercises the app for real from a phone browser (the actual
+  Stage 6 Done criteria: "Dan manages all data from phone browser; syncs to
+  device") — add a todo/shopping item from the web, confirm it shows up on
+  the device after its next sync, and vice versa.

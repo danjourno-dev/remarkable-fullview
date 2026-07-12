@@ -75,13 +75,16 @@ reflection-based JSON serialization that trimming can silently break).
 
 ## Runtime configuration
 
-The app reads three optional environment variables at startup:
+The app reads these optional environment variables at startup:
 
 | Var | Default | Meaning |
 |---|---|---|
 | `FULLVIEW_DB_PATH` | `<binary's directory>/fullview.db` | SQLite store location |
 | `FULLVIEW_TOUCH_DEVICE` | `/dev/input/event2` | evdev node for the capacitive touchscreen |
 | `FULLVIEW_BUTTON_DEVICE` | `/dev/input/event1` | evdev node for the physical buttons — the right-hand button switches Personal/Work mode |
+| `FULLVIEW_DEVICE_ID` | `device` | this device's id in sync payloads (`UpdatedBy`, `/sync` request) |
+| `FULLVIEW_API_BASE_URL` | unset | base URL of the deployed `/sync` API (e.g. `https://<id>.execute-api.<region>.amazonaws.com`); sync is disabled entirely if unset |
+| `FULLVIEW_MODE` | `app` | `app` (default, foreground UI) or `sync-once` (headless outbox drain, see below) |
 
 The touch default was confirmed on hardware via `cat /proc/bus/input/devices`:
 event0 is the Wacom pen digitizer, event1 is `gpio-keys` (the physical side
@@ -101,6 +104,40 @@ one-off env var or via the manifest's `environment` map (see
 `tools/device/appload/external.manifest.json`).
 
 There is deliberately no systemd unit or other auto-restarting background
-service for this app: AppLoad owns starting and stopping it (from the
-launcher, and via the drag-to-close gesture), and an independently
+service running the *foreground app*: AppLoad owns starting and stopping it
+(from the launcher, and via the drag-to-close gesture), and an independently
 restarting service would fight AppLoad for the same qtfb registration.
+
+## Background sync timer (Stage 5)
+
+`tools/device/deploy-over-ssh.sh` installs one systemd unit —
+`fullview-sync.timer` — that periodically runs the same binary in
+`FULLVIEW_MODE=sync-once`. That mode returns before ever opening `/dev/fb0`,
+qtfb, or evdev, so it can't contend with the AppLoad-launched foreground app
+for the framebuffer; it just drains the local outbox to `/sync` in the
+background, roughly every 30 minutes, and does nothing at all (no network
+call) if there's nothing queued to push.
+
+Before deploying, create `/etc/fullview-sync.env` on the device by hand over
+SSH (it's device-specific, so the deploy script never writes it and it's
+never committed to the repo):
+
+```
+FULLVIEW_API_BASE_URL=https://<your-api-id>.execute-api.<your-region>.amazonaws.com
+FULLVIEW_DEVICE_ID=<your-device-id>
+```
+
+After a deploy, verify the timer is scheduled and check its most recent run:
+
+```
+ssh root@10.11.99.1 systemctl status fullview-sync.timer
+ssh root@10.11.99.1 systemctl status fullview-sync.service
+ssh root@10.11.99.1 journalctl -u fullview-sync.service -n 20
+```
+
+To force an immediate drain without waiting for the next scheduled firing
+(useful when testing Checkpoint 5.1's kill-WiFi scenario):
+
+```
+ssh root@10.11.99.1 systemctl start fullview-sync.service
+```

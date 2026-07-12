@@ -1,16 +1,20 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reflection;
+using System.Security.Cryptography.X509Certificates;
 using Fullview.Device;
 using Fullview.Device.Input;
 using Fullview.Device.Storage;
+using Fullview.Device.Sync;
 using Fullview.Domain;
 using Fullview.Domain.Entities;
 using Fullview.Rendering;
 using Fullview.Rendering.Layout;
 using SixLabors.ImageSharp;
 
-const string DeviceId = "device";
+string deviceId = Environment.GetEnvironmentVariable("FULLVIEW_DEVICE_ID") ?? "device";
+string? apiBaseUrl = Environment.GetEnvironmentVariable("FULLVIEW_API_BASE_URL");
+string runMode = Environment.GetEnvironmentVariable("FULLVIEW_MODE") ?? "app";
 
 string dbPath = Environment.GetEnvironmentVariable("FULLVIEW_DB_PATH")
     ?? Path.Combine(AppContext.BaseDirectory, "fullview.db");
@@ -29,6 +33,49 @@ var store = new DeviceStore(database);
 var settings = new DeviceSettings(database);
 
 SeedData.ApplyIfEmpty(store);
+
+// Headless mode for the systemd RTC-wake timer (tools/device/systemd/fullview-sync.timer):
+// no fb0/qtfb/evdev is touched here, so it can never contend with the AppLoad-launched
+// foreground app for the framebuffer. Skips the network call entirely when there's nothing
+// queued to push, to avoid waking the radio every 30 minutes for no reason.
+if (string.Equals(runMode, "sync-once", StringComparison.OrdinalIgnoreCase))
+{
+    if (store.OutboxCount() == 0)
+    {
+        Console.WriteLine("[sync] sync-once: outbox empty, nothing to push, skipping.");
+        Environment.Exit(0);
+    }
+
+    if (apiBaseUrl is null)
+    {
+        Console.WriteLine("[sync] sync-once: FULLVIEW_API_BASE_URL not set, cannot sync.");
+        Environment.Exit(1);
+    }
+
+    using var syncOnceHandler = CreateHttpHandler();
+    using var syncOnceHttp = new HttpClient(syncOnceHandler) { BaseAddress = new Uri(apiBaseUrl!), Timeout = TimeSpan.FromSeconds(20) };
+    var syncOnceEngine = new SyncEngine(store, settings, new SyncClient(syncOnceHttp), deviceId);
+    var syncOnceOutcome = syncOnceEngine.SyncOnceAsync(CancellationToken.None).GetAwaiter().GetResult();
+    Console.WriteLine($"[sync] sync-once: {syncOnceOutcome}.");
+    Environment.Exit(syncOnceOutcome == SyncOutcome.Succeeded ? 0 : 1);
+}
+
+// A fresh read on every open (Stage 5): catches up on anything that changed via web/other
+// devices while this one was closed. Short timeout so a slow/absent network doesn't stall
+// startup for long — a failed attempt just leaves the local cache as-is (B2: stale is fine,
+// never hidden) and the footer will read "NOT SYNCED" or the last-known time.
+SyncEngine? syncEngine = null;
+if (apiBaseUrl is not null)
+{
+    var syncHttp = new HttpClient(CreateHttpHandler()) { BaseAddress = new Uri(apiBaseUrl), Timeout = TimeSpan.FromSeconds(8) };
+    syncEngine = new SyncEngine(store, settings, new SyncClient(syncHttp), deviceId);
+    var startupOutcome = syncEngine.SyncOnceAsync(CancellationToken.None).GetAwaiter().GetResult();
+    Console.WriteLine($"[sync] Startup sync: {startupOutcome}.");
+}
+else
+{
+    Console.WriteLine("[sync] FULLVIEW_API_BASE_URL not set; sync disabled.");
+}
 
 // AppLoad (tools/device/appload/external.manifest.json, qtfb: true) hands us a framebuffer
 // key via QTFB_KEY when it launches us from the launcher; its absence means we were
@@ -52,7 +99,9 @@ var state = new BoardState(
     ShoppingItems: store.Query<ShoppingItem>(),
     Recipes: store.Query<Recipe>(),
     InboxPages: store.Query<InboxPage>(),
-    Now: DateTimeOffset.Now);
+    Now: DateTimeOffset.Now,
+    LastSyncedAt: settings.GetLastSyncedAt(),
+    PendingSyncCount: store.OutboxCount());
 
 var lastRender = BoardRenderer.Render(fb.Width, fb.Height, state, version);
 fb.WriteImage(lastRender.Image);
@@ -127,7 +176,8 @@ foreach (var input in inputs.GetConsumingEnumerable(cts.Token))
     var swTotal = Stopwatch.StartNew();
 
     var swApply = Stopwatch.StartNew();
-    state = Apply(action, state, store, settings);
+    state = Apply(action, state, store, settings, deviceId, syncEngine);
+    state = state with { LastSyncedAt = settings.GetLastSyncedAt(), PendingSyncCount = store.OutboxCount() };
     swApply.Stop();
 
     RenderDiagnostics.Reset();
@@ -166,6 +216,84 @@ touch?.Dispose();
 button?.Dispose();
 
 Console.WriteLine("Exiting.");
+
+// The reMarkable 1's system libssl.so.3 (OpenSSL 3.2.6, armv7l) has a native time_t
+// ABI bug: X509_cmp_time's ASN1_TIME_to_tm parse fails ("format error in certificate's
+// notBefore field") for every certificate in a chain, including long-issued roots,
+// regardless of whether the cert is actually valid. `openssl s_client` against the same
+// host at the same moment validates fine, and .NET's own *managed* NotBefore/NotAfter
+// properties parse correctly — only the native chain-build time check is broken. Since
+// we can't patch the device's system OpenSSL, re-check validity ourselves using the
+// already-correctly-parsed managed properties, and only override the native chain
+// status when NotTimeValid is the *only* problem reported and our own check confirms
+// the cert is genuinely within its validity window. Any other chain error (untrusted
+// root, revoked, name mismatch, tampering) still fails closed exactly as before.
+static HttpClientHandler CreateHttpHandler()
+{
+    var debug = Environment.GetEnvironmentVariable("FULLVIEW_TLS_DEBUG") == "1";
+    var handler = new HttpClientHandler();
+    handler.ServerCertificateCustomValidationCallback = (_, cert, chain, errors) =>
+    {
+        if (errors == System.Net.Security.SslPolicyErrors.None)
+        {
+            return true;
+        }
+
+        if (debug)
+        {
+            Console.WriteLine($"[tls-debug] SslPolicyErrors={errors}");
+        }
+
+        if (errors != System.Net.Security.SslPolicyErrors.RemoteCertificateChainErrors || chain is null)
+        {
+            return false;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        foreach (var element in chain.ChainElements)
+        {
+            foreach (var status in element.ChainElementStatus)
+            {
+                if (status.Status != X509ChainStatusFlags.NotTimeValid)
+                {
+                    return false;
+                }
+            }
+
+            var notBefore = new DateTimeOffset(element.Certificate.NotBefore.ToUniversalTime());
+            var notAfter = new DateTimeOffset(element.Certificate.NotAfter.ToUniversalTime());
+            if (now < notBefore || now > notAfter)
+            {
+                return false;
+            }
+        }
+
+        if (debug)
+        {
+            Console.WriteLine("[tls-debug] Overriding native NotTimeValid: every cert's managed-parsed NotBefore/NotAfter covers the current time.");
+        }
+
+        return true;
+    };
+    return handler;
+}
+
+// Toggles are the highest-value thing to get off the device quickly (they're what a
+// caregiver checking the web view actually cares about), so we piggyback a drain attempt
+// on the same request/render cycle instead of waiting for the next app-open or timer tick.
+// Same fire-now-fail-silent contract as every other SyncOnceAsync call site: a failure just
+// leaves the outbox for the next trigger to retry, never blocks or surfaces an error to the
+// user beyond the footer's existing pending-count/last-synced display.
+static void TryImmediateSync(SyncEngine? syncEngine)
+{
+    if (syncEngine is null)
+    {
+        return;
+    }
+
+    var outcome = syncEngine.SyncOnceAsync(CancellationToken.None).GetAwaiter().GetResult();
+    Console.WriteLine($"[sync] Post-toggle sync: {outcome}.");
+}
 
 static void LogRegions(ScreenRenderResult render)
 {
@@ -236,7 +364,9 @@ static void RunButtonLoop(EvdevDevice button, BlockingCollection<DeviceInput> in
     }
 }
 
-static BoardState Apply(BoardAction action, BoardState state, DeviceStore store, DeviceSettings settings)
+static BoardState Apply(
+    BoardAction action, BoardState state, DeviceStore store, DeviceSettings settings,
+    string deviceId, SyncEngine? syncEngine)
 {
     switch (action)
     {
@@ -255,15 +385,37 @@ static BoardState Apply(BoardAction action, BoardState state, DeviceStore store,
             return state.WithScreen(screen) with { Now = DateTimeOffset.Now };
 
         case BoardAction.ToggleTodo(var todoId):
-            store.ToggleTodoCompleted(todoId, DeviceId);
+            store.ToggleTodoCompleted(todoId, deviceId);
+            TryImmediateSync(syncEngine);
             return state with { Todos = store.Query<Todo>(), Now = DateTimeOffset.Now };
 
         case BoardAction.ToggleShoppingItem(var itemId):
-            store.ToggleShoppingItemChecked(itemId, DeviceId);
+            store.ToggleShoppingItemChecked(itemId, deviceId);
+            TryImmediateSync(syncEngine);
             return state with { ShoppingItems = store.Query<ShoppingItem>(), Now = DateTimeOffset.Now };
 
         case BoardAction.OpenRecipe(var recipeId):
             return state.WithOpenRecipe(recipeId) with { Now = DateTimeOffset.Now };
+
+        case BoardAction.SyncNow:
+            if (syncEngine is null)
+            {
+                Console.WriteLine("[sync] Manual sync tapped but FULLVIEW_API_BASE_URL not set; ignoring.");
+                return state with { Now = DateTimeOffset.Now };
+            }
+
+            var outcome = syncEngine.SyncOnceAsync(CancellationToken.None).GetAwaiter().GetResult();
+            Console.WriteLine($"[sync] Manual sync: {outcome}.");
+            return state with
+            {
+                Todos = store.Query<Todo>(),
+                AgendaEvents = store.Query<AgendaEvent>(),
+                Meals = store.Query<Meal>(),
+                ShoppingItems = store.Query<ShoppingItem>(),
+                Recipes = store.Query<Recipe>(),
+                InboxPages = store.Query<InboxPage>(),
+                Now = DateTimeOffset.Now
+            };
 
         default:
             throw new ArgumentOutOfRangeException(nameof(action), action, "Unknown board action.");

@@ -16,7 +16,9 @@ public sealed record BoardState(
     IReadOnlyList<ShoppingItem> ShoppingItems,
     IReadOnlyList<Recipe> Recipes,
     IReadOnlyList<InboxPage> InboxPages,
-    DateTimeOffset Now)
+    DateTimeOffset Now,
+    DateTimeOffset? LastSyncedAt = null,
+    int PendingSyncCount = 0)
 {
     public BoardState WithMode(SyncContext mode) => this with { Mode = mode, CurrentScreen = ScreenSet.NavigationOrder(mode)[0] };
 

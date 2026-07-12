@@ -16,6 +16,22 @@ public sealed class DeviceDatabase : IDisposable
     {
         var connection = new SqliteConnection($"Data Source={path}");
         connection.Open();
+
+        // Stage 5: the headless FULLVIEW_MODE=sync-once process (systemd timer, RTC wake) and
+        // the foreground AppLoad app can both hold this file open at once. WAL lets readers
+        // and a writer coexist instead of failing immediately on SQLITE_BUSY; busy_timeout
+        // covers writer-vs-writer contention by retrying instead of throwing.
+        using (var pragma = connection.CreateCommand())
+        {
+            pragma.CommandText = "PRAGMA journal_mode=WAL;";
+            pragma.ExecuteNonQuery();
+        }
+        using (var pragma = connection.CreateCommand())
+        {
+            pragma.CommandText = "PRAGMA busy_timeout=5000;";
+            pragma.ExecuteNonQuery();
+        }
+
         var database = new DeviceDatabase(connection);
         database.Migrate();
         return database;

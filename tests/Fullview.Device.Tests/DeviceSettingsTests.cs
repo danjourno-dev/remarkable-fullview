@@ -48,4 +48,43 @@ public class DeviceSettingsTests : IDisposable
 
         Assert.Equal(SyncContext.Personal, _settings.GetMode());
     }
+
+    [Fact]
+    public void GetSyncCursor_DefaultsToNull_WhenNeverSet()
+    {
+        Assert.Null(_settings.GetSyncCursor());
+    }
+
+    [Fact]
+    public void SetSyncCursor_ThenGetSyncCursor_RoundTrips()
+    {
+        _settings.SetSyncCursor("cursor-123");
+
+        Assert.Equal("cursor-123", _settings.GetSyncCursor());
+    }
+
+    [Fact]
+    public void SetSyncCursor_Twice_UpdatesRatherThanThrowing()
+    {
+        _settings.SetSyncCursor("cursor-1");
+        _settings.SetSyncCursor("cursor-2");
+
+        Assert.Equal("cursor-2", _settings.GetSyncCursor());
+    }
+
+    [Fact]
+    public void GetLastSyncedAt_DefaultsToNull_WhenNeverSet()
+    {
+        Assert.Null(_settings.GetLastSyncedAt());
+    }
+
+    [Fact]
+    public void SetLastSyncedAt_ThenGetLastSyncedAt_RoundTrips()
+    {
+        var at = new DateTimeOffset(2026, 7, 12, 9, 30, 0, TimeSpan.Zero);
+
+        _settings.SetLastSyncedAt(at);
+
+        Assert.Equal(at, _settings.GetLastSyncedAt());
+    }
 }

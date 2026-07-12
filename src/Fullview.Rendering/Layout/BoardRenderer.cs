@@ -40,8 +40,10 @@ public static class BoardRenderer
             regions.Add(region with { Bounds = region.Bounds.WithOffset(0, bodyY) });
         }
 
-        var footer = Footer.Render(width, inboxStatus, state.Mode, version);
+        string syncStatus = SyncStatus(state);
+        var (footer, syncStatusBounds) = Footer.Render(width, inboxStatus, syncStatus, state.Mode, version);
         Canvas.Composite(image, footer, 0, height - Footer.Height);
+        regions.Add(new HitRegion(syncStatusBounds.WithOffset(0, height - Footer.Height), new BoardAction.SyncNow()));
 
         regions.Add(new HitRegion(new Rectangle(0, bodyY, EdgeNavWidth, bodyHeight), new BoardAction.NavigatePrevious()));
         regions.Add(new HitRegion(new Rectangle(width - EdgeNavWidth, bodyY, EdgeNavWidth, bodyHeight), new BoardAction.NavigateNext()));
@@ -120,6 +122,12 @@ public static class BoardRenderer
     {
         int queuedPages = state.InboxPages.Count(p => !p.Deleted && p.State == InboxPageState.Queued);
         return queuedPages == 0 ? "ALL CLEAR" : $"{queuedPages} PAGE{(queuedPages == 1 ? "" : "S")}";
+    }
+
+    private static string SyncStatus(BoardState state)
+    {
+        string pending = state.PendingSyncCount == 0 ? "" : $" · {state.PendingSyncCount} PENDING";
+        return state.LastSyncedAt is { } at ? $"SYNCED {at.ToLocalTime():HH:mm}{pending}" : $"NOT SYNCED{pending}";
     }
 
     private static IReadOnlyList<T> FilterByContext<T>(IReadOnlyList<T> entities, SyncContext mode) where T : SyncEntity =>

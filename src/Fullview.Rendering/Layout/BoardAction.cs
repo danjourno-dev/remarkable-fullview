@@ -22,4 +22,7 @@ public abstract record BoardAction
     /// unlike NavigatePrevious/Next this ignores the current mode's ScreenSet order, the same
     /// way OpenRecipe does.</summary>
     public sealed record NavigateToScreen(ScreenKind Screen) : BoardAction;
+
+    /// <summary>Manual sync, triggered by tapping the footer's sync-status text (Stage 5).</summary>
+    public sealed record SyncNow : BoardAction;
 }

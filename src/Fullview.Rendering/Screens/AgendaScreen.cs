@@ -13,32 +13,43 @@ namespace Fullview.Rendering.Screens;
 public static class AgendaScreen
 {
     private const int Margin = 24;
-    private const int HeaderScale = 4;
-    private const int RowScale = 3;
-    private const int RowHeight = 70;
+    private const int HeaderSize = 32;
+    private const int RowSize = 33;
+    private const int RowHeight = 105;
 
     public static ScreenRenderResult Render(int width, int height, IReadOnlyList<AgendaEvent> events)
     {
         var image = new Image<L8>(width, height, new L8(Canvas.White));
 
-        BitmapFont.DrawText(image, "AGENDA", Margin, Margin, HeaderScale, Canvas.Black);
+        var headerFont = AppFont.Bold(HeaderSize);
+        AppFont.DrawText(image, "AGENDA", Margin, Margin, headerFont, Canvas.Black);
 
-        int y = Margin + BitmapFont.GlyphHeight * HeaderScale + Margin;
+        int y = Margin + AppFont.LineHeight(headerFont) + Margin;
         var ordered = events.OrderBy(e => e.IsAllDay ? 0 : 1).ThenBy(e => e.Start).ToList();
         var (visible, overflow) = ListPage.Paginate(ordered);
+
+        var rowFont = AppFont.Regular(RowSize);
+        int rowWidth = width - 2 * Margin;
+
+        if (visible.Count > 0)
+        {
+            Canvas.DrawDivider(image, Margin, y - 8, rowWidth);
+        }
 
         foreach (var ev in visible)
         {
             string time = ev.IsAllDay ? "ALL DAY" : ev.Start.ToLocalTime().ToString("HH:mm");
             string marker = ev.Source == AgendaEventSource.GoogleCalendar ? "*" : "";
             string line = $"{time} {ev.Title}{marker}";
-            BitmapFont.DrawText(image, line, Margin, y, RowScale, Canvas.Black);
+
+            AppFont.DrawText(image, line, Margin, y, rowFont, Canvas.Black);
             y += RowHeight;
+            Canvas.DrawDivider(image, Margin, y - 8, rowWidth);
         }
 
         if (overflow > 0)
         {
-            BitmapFont.DrawText(image, $"+{overflow} MORE", Margin, y, RowScale, Canvas.Black);
+            AppFont.DrawText(image, $"+{overflow} MORE", Margin, y, rowFont, Canvas.Black);
         }
 
         return new ScreenRenderResult(image, Array.Empty<HitRegion>());

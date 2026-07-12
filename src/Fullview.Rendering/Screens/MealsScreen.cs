@@ -10,9 +10,9 @@ namespace Fullview.Rendering.Screens;
 public static class MealsScreen
 {
     private const int Margin = 24;
-    private const int HeaderScale = 4;
-    private const int DateScale = 3;
-    private const int RowScale = 3;
+    private const int HeaderSize = 32;
+    private const int DateSize = 22;
+    private const int RowSize = 22;
     private const int RowHeight = 60;
     private const int DateGap = 16;
 
@@ -25,11 +25,14 @@ public static class MealsScreen
         var image = new Image<L8>(width, height, new L8(Canvas.White));
         var regions = new List<HitRegion>();
 
-        BitmapFont.DrawText(image, "MEALS", Margin, Margin, HeaderScale, Canvas.Black);
+        var headerFont = AppFont.Bold(HeaderSize);
+        AppFont.DrawText(image, "MEALS", Margin, Margin, headerFont, Canvas.Black);
 
-        int y = Margin + BitmapFont.GlyphHeight * HeaderScale + Margin;
+        int y = Margin + AppFont.LineHeight(headerFont) + Margin;
 
         var byDate = meals.OrderBy(m => m.Date).ThenBy(m => m.Slot).GroupBy(m => m.Date);
+        var dateFont = AppFont.Bold(DateSize);
+        var rowFont = AppFont.Regular(RowSize);
 
         foreach (var day in byDate)
         {
@@ -38,8 +41,8 @@ public static class MealsScreen
                 break;
             }
 
-            BitmapFont.DrawText(image, FormatDate(day.Key), Margin, y, DateScale, Canvas.Black);
-            y += BitmapFont.GlyphHeight * DateScale + 10;
+            AppFont.DrawText(image, FormatDate(day.Key), Margin, y, dateFont, Canvas.Black);
+            y += AppFont.LineHeight(dateFont) + 10;
 
             foreach (var meal in day)
             {
@@ -48,12 +51,12 @@ public static class MealsScreen
                     ?? (meal.RecipeId is not null && recipesById.TryGetValue(meal.RecipeId, out var recipe) ? recipe.Title : "—");
                 string line = $"{slotLabel}: {description}";
 
-                BitmapFont.DrawText(image, line, Margin, y, RowScale, Canvas.Black);
+                AppFont.DrawText(image, line, Margin, y, rowFont, Canvas.Black);
 
                 if (meal.RecipeId is not null)
                 {
-                    int textWidth = BitmapFont.MeasureWidth(line, RowScale);
-                    int rowHeight = BitmapFont.GlyphHeight * RowScale + 12;
+                    int textWidth = AppFont.MeasureWidth(line, rowFont);
+                    int rowHeight = AppFont.LineHeight(rowFont) + 12;
                     regions.Add(new HitRegion(
                         new Rectangle(Margin, y - 6, textWidth, rowHeight),
                         new BoardAction.OpenRecipe(meal.RecipeId)));

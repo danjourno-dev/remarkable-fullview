@@ -52,14 +52,12 @@ public class BoardRendererTests
 
         Assert.Contains(result.Regions, r => r.Action is BoardAction.NavigateToScreen(ScreenKind.Agenda));
         Assert.Contains(result.Regions, r => r.Action is BoardAction.NavigateToScreen(ScreenKind.Meals));
-        Assert.Contains(result.Regions, r => r.Action is BoardAction.NavigateToScreen(ScreenKind.Shopping));
-        Assert.Contains(result.Regions, r => r.Action is BoardAction.NavigateToScreen(ScreenKind.Todos));
     }
 
     [Fact]
     public void Render_TodoHitRegion_IsOffsetIntoBodyArea()
     {
-        var state = EmptyState(SyncContext.Personal, ScreenKind.Todos) with
+        var state = EmptyState(SyncContext.Personal, ScreenKind.Today) with
         {
             Todos = new[]
             {
@@ -74,9 +72,9 @@ public class BoardRendererTests
     }
 
     [Fact]
-    public void Render_TodosScreen_OnlyShowsCurrentModeContext()
+    public void Render_RemindersPanel_OnlyShowsCurrentModeContext()
     {
-        var state = EmptyState(SyncContext.Personal, ScreenKind.Todos) with
+        var state = EmptyState(SyncContext.Personal, ScreenKind.Today) with
         {
             Todos = new[]
             {

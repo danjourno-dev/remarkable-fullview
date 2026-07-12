@@ -23,6 +23,11 @@ public sealed class FramebufferDevice : IDisposable
     public int BitsPerPixel { get; }
     public int Stride { get; }
 
+    // Reused across blits so a full-frame write doesn't allocate a new row buffer on every
+    // tap (previously each pixel was written with its own Marshal.Write* call — ~2.6M P/Invoke
+    // calls per frame; now one row is built in managed memory and Marshal.Copy'd in a single call).
+    private readonly byte[] _rowBuffer;
+
     private FramebufferDevice(int fd, IntPtr map, int mapLength, int width, int height, int bitsPerPixel, int stride)
     {
         _fd = fd;
@@ -32,6 +37,7 @@ public sealed class FramebufferDevice : IDisposable
         Height = height;
         BitsPerPixel = bitsPerPixel;
         Stride = stride;
+        _rowBuffer = new byte[stride];
     }
 
     public static FramebufferDevice Open()
@@ -125,19 +131,42 @@ public sealed class FramebufferDevice : IDisposable
         }
     }
 
+    // All 256 gray levels fit a lookup table, so the RGB565 conversion below is a table read
+    // instead of shifting/masking per pixel every frame.
+    private static readonly ushort[] GrayToRgb565Table = BuildGrayToRgb565Table();
+
+    private static ushort[] BuildGrayToRgb565Table()
+    {
+        var table = new ushort[256];
+        for (int gray = 0; gray < table.Length; gray++)
+        {
+            int r = gray >> 3; // 5 bits
+            int g = gray >> 2; // 6 bits
+            int b = gray >> 3; // 5 bits
+            table[gray] = (ushort)((r << 11) | (g << 5) | b);
+        }
+
+        return table;
+    }
+
     private void WriteImageRgb565(Image<L8> image)
     {
+        // Building each row in managed memory and Marshal.Copy'ing it as a single block avoids
+        // one Marshal.Write* P/Invoke per pixel (~2.6M calls for a full rM1 frame) — that
+        // per-call overhead, not the actual byte shuffling, was the dominant blit cost.
         image.ProcessPixelRows(accessor =>
         {
             for (int y = 0; y < accessor.Height; y++)
             {
                 var row = accessor.GetRowSpan(y);
-                IntPtr rowPtr = _map + y * Stride;
                 for (int x = 0; x < row.Length; x++)
                 {
-                    ushort rgb565 = GrayToRgb565(row[x].PackedValue);
-                    Marshal.WriteInt16(rowPtr + x * 2, unchecked((short)rgb565));
+                    ushort rgb565 = GrayToRgb565Table[row[x].PackedValue];
+                    _rowBuffer[x * 2] = (byte)rgb565;
+                    _rowBuffer[x * 2 + 1] = (byte)(rgb565 >> 8);
                 }
+
+                Marshal.Copy(_rowBuffer, 0, _map + y * Stride, row.Length * 2);
             }
         });
     }
@@ -149,21 +178,14 @@ public sealed class FramebufferDevice : IDisposable
             for (int y = 0; y < accessor.Height; y++)
             {
                 var row = accessor.GetRowSpan(y);
-                IntPtr rowPtr = _map + y * Stride;
                 for (int x = 0; x < row.Length; x++)
                 {
-                    Marshal.WriteByte(rowPtr + x, row[x].PackedValue);
+                    _rowBuffer[x] = row[x].PackedValue;
                 }
+
+                Marshal.Copy(_rowBuffer, 0, _map + y * Stride, row.Length);
             }
         });
-    }
-
-    private static ushort GrayToRgb565(byte gray)
-    {
-        int r = gray >> 3; // 5 bits
-        int g = gray >> 2; // 6 bits
-        int b = gray >> 3; // 5 bits
-        return (ushort)((r << 11) | (g << 5) | b);
     }
 
     /// <summary>

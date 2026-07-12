@@ -19,6 +19,12 @@ public static class EvCodes
     public const ushort EV_KEY = 0x01;
     public const ushort EV_ABS = 0x03;
 
+    /// <summary>Terminates one batch of EV_ABS updates. The touch controller reports
+    /// ABS_MT_TRACKING_ID before ABS_MT_POSITION_X/Y within a frame, so touch-down/up state
+    /// must not be evaluated until SYN_REPORT — evaluating it eagerly on TRACKING_ID reads
+    /// stale X/Y left over from the previous touch.</summary>
+    public const ushort SYN_REPORT = 0x00;
+
     public const ushort ABS_MT_POSITION_X = 0x35;
     public const ushort ABS_MT_POSITION_Y = 0x36;
     public const ushort ABS_MT_TRACKING_ID = 0x39;

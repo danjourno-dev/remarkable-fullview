@@ -84,6 +84,7 @@ The app reads these optional environment variables at startup:
 | `FULLVIEW_BUTTON_DEVICE` | `/dev/input/event1` | evdev node for the physical buttons — the right-hand button switches Personal/Work mode |
 | `FULLVIEW_DEVICE_ID` | `device` | this device's id in sync payloads (`UpdatedBy`, `/sync` request) |
 | `FULLVIEW_API_BASE_URL` | unset | base URL of the deployed `/sync` API (e.g. `https://<id>.execute-api.<region>.amazonaws.com`); sync is disabled entirely if unset |
+| `FULLVIEW_API_KEY` | unset | the shared API key checked by API Gateway's authorizer (see "API authentication" below); every `/sync` call is rejected with 401 if unset or wrong, which the app treats like any other sync failure |
 | `FULLVIEW_MODE` | `app` | `app` (default, foreground UI) or `sync-once` (headless outbox drain, see below) |
 
 The touch default was confirmed on hardware via `cat /proc/bus/input/devices`:
@@ -125,7 +126,12 @@ never committed to the repo):
 ```
 FULLVIEW_API_BASE_URL=https://<your-api-id>.execute-api.<your-region>.amazonaws.com
 FULLVIEW_DEVICE_ID=<your-device-id>
+FULLVIEW_API_KEY=<your-api-key, see "API authentication" below>
 ```
+
+`run.sh` (the AppLoad launch target) sources this same file before starting
+the foreground app, so one file covers both the foreground app's startup/
+manual sync and the background timer's `sync-once` runs.
 
 After a deploy, verify the timer is scheduled and check its most recent run:
 
@@ -141,3 +147,35 @@ To force an immediate drain without waiting for the next scheduled firing
 ```
 ssh root@10.11.99.1 systemctl start fullview-sync.service
 ```
+
+## API authentication
+
+`/sync` is protected by a REQUEST authorizer on the HTTP API: every call must
+carry an `x-api-key` header matching a single shared secret held as a
+SecureString in SSM Parameter Store. This is deliberately the simplest thing
+that works for a single-user app (see docs/plans/implementation.md) — there's
+no login flow, just one key that either matches or doesn't. `/health` stays
+unauthenticated (no sensitive data, useful as a plain liveness probe).
+
+CloudFormation can't create SecureString parameters, so the CDK stack
+(`FullviewStack`) never creates this parameter — only Dan (or a forker)
+creates it, once, by hand:
+
+```bash
+aws ssm put-parameter \
+  --name /fullview-api-key \
+  --type SecureString \
+  --value "$(openssl rand -hex 32)"
+```
+
+Then read it back once to put the same value in `/etc/fullview-sync.env` on
+the device (see above) as `FULLVIEW_API_KEY`:
+
+```bash
+aws ssm get-parameter --name /fullview-api-key --with-decryption --query Parameter.Value --output text
+```
+
+A forker deploying their own stack under a different `ResourcePrefix` uses
+`/<their-prefix>api-key` instead — the authorizer Lambda's
+`FULLVIEW_API_KEY_PARAM` environment variable (set by the CDK stack) always
+points at the right name for that deployment.

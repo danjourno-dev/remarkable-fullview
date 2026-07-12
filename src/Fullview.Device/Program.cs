@@ -14,6 +14,7 @@ using SixLabors.ImageSharp;
 
 string deviceId = Environment.GetEnvironmentVariable("FULLVIEW_DEVICE_ID") ?? "device";
 string? apiBaseUrl = Environment.GetEnvironmentVariable("FULLVIEW_API_BASE_URL");
+string? apiKey = Environment.GetEnvironmentVariable("FULLVIEW_API_KEY");
 string runMode = Environment.GetEnvironmentVariable("FULLVIEW_MODE") ?? "app";
 
 string dbPath = Environment.GetEnvironmentVariable("FULLVIEW_DB_PATH")
@@ -54,6 +55,7 @@ if (string.Equals(runMode, "sync-once", StringComparison.OrdinalIgnoreCase))
 
     using var syncOnceHandler = CreateHttpHandler();
     using var syncOnceHttp = new HttpClient(syncOnceHandler) { BaseAddress = new Uri(apiBaseUrl!), Timeout = TimeSpan.FromSeconds(20) };
+    AddApiKeyHeader(syncOnceHttp, apiKey);
     var syncOnceEngine = new SyncEngine(store, settings, new SyncClient(syncOnceHttp), deviceId);
     var syncOnceOutcome = syncOnceEngine.SyncOnceAsync(CancellationToken.None).GetAwaiter().GetResult();
     Console.WriteLine($"[sync] sync-once: {syncOnceOutcome}.");
@@ -68,6 +70,7 @@ SyncEngine? syncEngine = null;
 if (apiBaseUrl is not null)
 {
     var syncHttp = new HttpClient(CreateHttpHandler()) { BaseAddress = new Uri(apiBaseUrl), Timeout = TimeSpan.FromSeconds(8) };
+    AddApiKeyHeader(syncHttp, apiKey);
     syncEngine = new SyncEngine(store, settings, new SyncClient(syncHttp), deviceId);
     var startupOutcome = syncEngine.SyncOnceAsync(CancellationToken.None).GetAwaiter().GetResult();
     Console.WriteLine($"[sync] Startup sync: {startupOutcome}.");
@@ -276,6 +279,23 @@ static HttpClientHandler CreateHttpHandler()
         return true;
     };
     return handler;
+}
+
+// Single-user v1 auth (see docs/plans/implementation.md): the API Gateway authorizer checks
+// this same header. A missing/wrong key makes every /sync call fail with 401, which
+// SyncEngine.SyncOnceAsync already treats like any other network failure (outbox and cursor
+// left untouched for the next retry) — so there's nothing special to handle here beyond
+// attaching the header when one is configured.
+static void AddApiKeyHeader(HttpClient http, string? apiKey)
+{
+    if (!string.IsNullOrEmpty(apiKey))
+    {
+        http.DefaultRequestHeaders.Add("x-api-key", apiKey);
+    }
+    else
+    {
+        Console.WriteLine("[sync] FULLVIEW_API_KEY not set; /sync calls will be rejected by the API.");
+    }
 }
 
 // Toggles are the highest-value thing to get off the device quickly (they're what a

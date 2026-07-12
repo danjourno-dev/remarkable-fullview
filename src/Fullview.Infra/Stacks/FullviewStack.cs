@@ -94,6 +94,48 @@ public sealed class FullviewStack : Stack
         });
         table.GrantReadWriteData(syncFunction);
 
+        // Single-user v1 auth (see docs/plans/implementation.md): one shared API key held as
+        // a SecureString in SSM Parameter Store. CloudFormation can't create SecureString
+        // parameters, so this stack never creates the parameter itself — Dan (or a forker)
+        // creates it once by hand (a plan-sanctioned manual step, see docs/device-setup.md)
+        // and this stack only ever reads it, via a REQUEST authorizer Lambda that checks the
+        // `x-api-key` header against it.
+        var apiKeyParameterName = $"/{settings.ResourcePrefix}api-key";
+        var apiKeyParameterArn = $"arn:aws:ssm:{Region}:{Account}:parameter{apiKeyParameterName}";
+
+        var authorizerFunction = new Function(this, "AuthorizerFunction", new FunctionProps
+        {
+            FunctionName = $"{settings.ResourcePrefix}authorizer",
+            Runtime = Runtime.DOTNET_8,
+            Handler = "Fullview.Api::Fullview.Api.Functions.AuthorizerFunction::FunctionHandler",
+            Code = Code.FromAsset(ResolveLambdaAsset()),
+            MemorySize = 256,
+            Timeout = Duration.Seconds(10),
+            Environment = new Dictionary<string, string>
+            {
+                ["FULLVIEW_API_KEY_PARAM"] = apiKeyParameterName
+            }
+        });
+
+        authorizerFunction.AddToRolePolicy(new Amazon.CDK.AWS.IAM.PolicyStatement(new Amazon.CDK.AWS.IAM.PolicyStatementProps
+        {
+            Actions = new[] { "ssm:GetParameter" },
+            Resources = new[] { apiKeyParameterArn }
+        }));
+
+        // The parameter uses the default AWS-managed key (alias/aws/ssm), whose key id isn't
+        // known at synth time — scoping by kms:ViaService instead of a resource ARN is the
+        // standard pattern for granting decrypt access to that key.
+        authorizerFunction.AddToRolePolicy(new Amazon.CDK.AWS.IAM.PolicyStatement(new Amazon.CDK.AWS.IAM.PolicyStatementProps
+        {
+            Actions = new[] { "kms:Decrypt" },
+            Resources = new[] { "*" },
+            Conditions = new Dictionary<string, object>
+            {
+                ["StringEquals"] = new Dictionary<string, object> { ["kms:ViaService"] = $"ssm.{Region}.amazonaws.com" }
+            }
+        }));
+
         // L1 (Cfn*) constructs throughout: the .NET binding for the HTTP API L2's Lambda
         // integration helper (Amazon.CDK.AWS.Apigatewayv2.Integrations) never went past a
         // 2020-era alpha release, so it's not a viable dependency for a public repo template.
@@ -128,11 +170,34 @@ public sealed class FullviewStack : Stack
             PayloadFormatVersion = "2.0"
         });
 
+        // /health stays open (no sensitive data, useful as an unauthenticated liveness probe);
+        // /sync carries the actual data and requires the shared API key.
+        var apiKeyAuthorizer = new CfnAuthorizer(this, "ApiKeyAuthorizer", new CfnAuthorizerProps
+        {
+            ApiId = httpApi.Ref,
+            Name = "ApiKeyAuthorizer",
+            AuthorizerType = "REQUEST",
+            AuthorizerUri = $"arn:aws:apigateway:{Region}:lambda:path/2015-03-31/functions/{authorizerFunction.FunctionArn}/invocations",
+            AuthorizerPayloadFormatVersion = "2.0",
+            EnableSimpleResponses = true,
+            IdentitySource = new[] { "$request.header.x-api-key" },
+            AuthorizerResultTtlInSeconds = 300
+        });
+
+        authorizerFunction.AddPermission("ApiGatewayInvoke", new Permission
+        {
+            Principal = new Amazon.CDK.AWS.IAM.ServicePrincipal("apigateway.amazonaws.com"),
+            Action = "lambda:InvokeFunction",
+            SourceArn = $"arn:aws:execute-api:{Region}:{Account}:{httpApi.Ref}/authorizers/{apiKeyAuthorizer.Ref}"
+        });
+
         _ = new CfnRoute(this, "SyncRoute", new CfnRouteProps
         {
             ApiId = httpApi.Ref,
             RouteKey = "POST /sync",
-            Target = $"integrations/{syncIntegration.Ref}"
+            Target = $"integrations/{syncIntegration.Ref}",
+            AuthorizationType = "CUSTOM",
+            AuthorizerId = apiKeyAuthorizer.Ref
         });
 
         _ = new CfnStage(this, "DefaultStage", new CfnStageProps
@@ -193,6 +258,22 @@ public sealed class FullviewStack : Stack
             TreatMissingData = TreatMissingData.NOT_BREACHING
         });
         syncErrorAlarm.AddAlarmAction(new SnsAction(alertTopic));
+
+        var authorizerErrorAlarm = new Alarm(this, "AuthorizerFunctionErrorAlarm", new AlarmProps
+        {
+            AlarmName = $"{settings.ResourcePrefix}authorizer-errors",
+            AlarmDescription = "Authorizer Lambda errored — likely can't read the API key from SSM; /sync will fail closed for everyone.",
+            Metric = authorizerFunction.MetricErrors(new MetricOptions
+            {
+                Period = Duration.Minutes(5),
+                Statistic = Stats.SUM
+            }),
+            Threshold = 1,
+            EvaluationPeriods = 1,
+            ComparisonOperator = ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+            TreatMissingData = TreatMissingData.NOT_BREACHING
+        });
+        authorizerErrorAlarm.AddAlarmAction(new SnsAction(alertTopic));
 
         _ = new CfnBudget(this, "MonthlyBudget", new CfnBudgetProps
         {

@@ -982,3 +982,40 @@ still needed to close Stage 5.
   (confirmed not the cause) with no leftover diff.
 - Changes staged, not committed — Dan reviews and commits manually per
   standing instruction.
+
+### 2026-07-12 — Session 14 (API Gateway authentication)
+
+- Implemented the single-user v1 auth model the plan already called for
+  (Part A: "API key in device/web config from SSM Parameter Store. Cognito
+  is v2."): a REQUEST authorizer (`AuthorizerFunction`, new in
+  `Fullview.Api/Functions`) on the HTTP API checks an `x-api-key` header
+  against a shared secret in SSM Parameter Store (`GetParameter` with
+  `WithDecryption=true`, compared with `CryptographicOperations.FixedTimeEquals`),
+  cached for the lifetime of the warm Lambda instance. `FullviewStack` wires
+  it up as a `CfnAuthorizer` (REQUEST, payload v2, simple responses,
+  300s result TTL) on `POST /sync` only — `/health` stays open as a plain
+  liveness probe, no sensitive data.
+- CloudFormation can't create `SecureString` SSM parameters, so the stack
+  never creates the parameter itself — only grants the authorizer Lambda
+  `ssm:GetParameter` (scoped to the specific parameter ARN) and
+  `kms:Decrypt` (scoped via `kms:ViaService` since the AWS-managed
+  `alias/aws/ssm` key's actual key id isn't known at synth time). Dan
+  creates the parameter once by hand (`aws ssm put-parameter ... --type
+  SecureString`) — documented as a manual step in `docs/device-setup.md`'s
+  new "API authentication" section, consistent with the plan's rule that
+  console/CLI-only steps are fine when the plan explicitly calls for them.
+- Device side: `Program.cs` reads `FULLVIEW_API_KEY` and attaches it as
+  `x-api-key` on both `HttpClient`s (`AddApiKeyHeader`). No special error
+  handling needed — a 401 throws `HttpRequestException` same as any other
+  HTTP failure, which `SyncEngine.SyncOnceAsync` already treats as a
+  no-op-and-retry-later failure.
+- Fixed a latent gap while touching this: `run.sh` (AppLoad's launch
+  target) never sourced `/etc/fullview-sync.env`, so the *foreground* app's
+  startup/manual sync never actually had `FULLVIEW_API_BASE_URL` /
+  `FULLVIEW_DEVICE_ID` set — only the systemd timer did. `run.sh` now
+  sources the same env file before exec'ing the binary, so one file
+  configures both paths, including the new `FULLVIEW_API_KEY`.
+- Fullview.Web has no client yet (Stage 6+), so nothing to update there —
+  whatever calls `/sync` from the web app later just needs the same header.
+- Changes staged, not committed — Dan reviews and commits manually per
+  standing instruction.

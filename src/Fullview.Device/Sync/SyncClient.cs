@@ -6,8 +6,9 @@ using Fullview.Domain.Sync;
 namespace Fullview.Device.Sync;
 
 /// <summary>Thin wrapper over the single `/sync` endpoint (B5 — same shape for device and
-/// web). No auth header: `/sync` is still unauthenticated as of Stage 2 (see PROGRESS.md),
-/// which is out of scope for Stage 5.</summary>
+/// web). Doesn't set the `x-api-key` header itself — the caller attaches it to the
+/// `HttpClient` passed in (see `AddApiKeyHeader` in Program.cs), since it's the same header
+/// on every request regardless of which endpoint is called.</summary>
 public sealed class SyncClient
 {
     private readonly HttpClient _http;

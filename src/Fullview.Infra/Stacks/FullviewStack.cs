@@ -50,17 +50,6 @@ public sealed class FullviewStack : Stack
             RemovalPolicy = RemovalPolicy.RETAIN
         });
 
-        // Stage 2: delta query for `/sync` reads everything changed since a cursor, ordered
-        // by UpdatedAt (B5). Single-user v1 means gsi1pk is the same constant as pk — this
-        // GSI exists purely to get an UpdatedAt-sorted view, not to shard by user.
-        table.AddGlobalSecondaryIndex(new GlobalSecondaryIndexProps
-        {
-            IndexName = "gsi1",
-            PartitionKey = new DynamoAttribute { Name = "gsi1pk", Type = AttributeType.STRING },
-            SortKey = new DynamoAttribute { Name = "gsi1sk", Type = AttributeType.STRING },
-            ProjectionType = ProjectionType.ALL
-        });
-
         var inboxBucket = new Bucket(this, "InboxBucket", new BucketProps
         {
             BucketName = settings.AwsAccountId is not null
@@ -81,13 +70,14 @@ public sealed class FullviewStack : Stack
             Timeout = Duration.Seconds(10)
         });
 
-        // Stage 2: same Fullview.Api package as HealthFunction — only the handler string
-        // and environment differ.
-        var syncFunction = new Function(this, "SyncFunction", new FunctionProps
+        // Same Fullview.Api package as HealthFunction — only the handler string and
+        // environment differ. One Lambda handles GET/POST/PUT on /entities, branching on
+        // HTTP method (Fullview.Api.Functions.EntitiesFunction).
+        var entitiesFunction = new Function(this, "EntitiesFunction", new FunctionProps
         {
-            FunctionName = $"{settings.ResourcePrefix}sync",
+            FunctionName = $"{settings.ResourcePrefix}entities",
             Runtime = Runtime.DOTNET_8,
-            Handler = "Fullview.Api::Fullview.Api.Functions.SyncFunction::FunctionHandler",
+            Handler = "Fullview.Api::Fullview.Api.Functions.EntitiesFunction::FunctionHandler",
             Code = Code.FromAsset(ResolveLambdaAsset()),
             MemorySize = 256,
             Timeout = Duration.Seconds(10),
@@ -96,7 +86,7 @@ public sealed class FullviewStack : Stack
                 ["FULLVIEW_TABLE_NAME"] = table.TableName
             }
         });
-        table.GrantReadWriteData(syncFunction);
+        table.GrantReadWriteData(entitiesFunction);
 
         // Single-user v1 auth (see docs/plans/implementation.md): one shared API key held as
         // a SecureString in SSM Parameter Store. CloudFormation can't create SecureString
@@ -203,8 +193,8 @@ public sealed class FullviewStack : Stack
         // L1 (Cfn*) constructs throughout: the .NET binding for the HTTP API L2's Lambda
         // integration helper (Amazon.CDK.AWS.Apigatewayv2.Integrations) never went past a
         // 2020-era alpha release, so it's not a viable dependency for a public repo template.
-        // Stage 6: Fullview.Web calls /sync directly from the browser (same shape as the
-        // device, per B5), so the HTTP API needs CORS. AllowOrigins is "*" rather than
+        // Stage 6: Fullview.Web calls /entities directly from the browser (same shape as
+        // the device), so the HTTP API needs CORS. AllowOrigins is "*" rather than
         // pinned to the CloudFront domain below because that domain isn't known until
         // after this same stack's first deploy (chicken-and-egg) — acceptable here since
         // the endpoint is protected by the x-api-key authorizer, not cookies/credentials.
@@ -215,7 +205,7 @@ public sealed class FullviewStack : Stack
             CorsConfiguration = new CfnApi.CorsProperty
             {
                 AllowOrigins = new[] { "*" },
-                AllowMethods = new[] { "GET", "POST", "OPTIONS" },
+                AllowMethods = new[] { "GET", "POST", "PUT", "OPTIONS" },
                 AllowHeaders = new[] { "content-type", "x-api-key" },
                 MaxAge = 300
             }
@@ -237,17 +227,17 @@ public sealed class FullviewStack : Stack
             Target = $"integrations/{healthIntegration.Ref}"
         });
 
-        var syncIntegration = new CfnIntegration(this, "SyncIntegration", new CfnIntegrationProps
+        var entitiesIntegration = new CfnIntegration(this, "EntitiesIntegration", new CfnIntegrationProps
         {
             ApiId = httpApi.Ref,
             IntegrationType = "AWS_PROXY",
-            IntegrationUri = syncFunction.FunctionArn,
+            IntegrationUri = entitiesFunction.FunctionArn,
             IntegrationMethod = "POST",
             PayloadFormatVersion = "2.0"
         });
 
         // /health stays open (no sensitive data, useful as an unauthenticated liveness probe);
-        // /sync carries the actual data and requires the shared API key.
+        // /entities carries the actual data and requires the shared API key.
         var apiKeyAuthorizer = new CfnAuthorizer(this, "ApiKeyAuthorizer", new CfnAuthorizerProps
         {
             ApiId = httpApi.Ref,
@@ -267,11 +257,29 @@ public sealed class FullviewStack : Stack
             SourceArn = $"arn:aws:execute-api:{Region}:{Account}:{httpApi.Ref}/authorizers/{apiKeyAuthorizer.Ref}"
         });
 
-        _ = new CfnRoute(this, "SyncRoute", new CfnRouteProps
+        _ = new CfnRoute(this, "EntitiesGetRoute", new CfnRouteProps
         {
             ApiId = httpApi.Ref,
-            RouteKey = "POST /sync",
-            Target = $"integrations/{syncIntegration.Ref}",
+            RouteKey = "GET /entities",
+            Target = $"integrations/{entitiesIntegration.Ref}",
+            AuthorizationType = "CUSTOM",
+            AuthorizerId = apiKeyAuthorizer.Ref
+        });
+
+        _ = new CfnRoute(this, "EntitiesPostRoute", new CfnRouteProps
+        {
+            ApiId = httpApi.Ref,
+            RouteKey = "POST /entities",
+            Target = $"integrations/{entitiesIntegration.Ref}",
+            AuthorizationType = "CUSTOM",
+            AuthorizerId = apiKeyAuthorizer.Ref
+        });
+
+        _ = new CfnRoute(this, "EntitiesPutRoute", new CfnRouteProps
+        {
+            ApiId = httpApi.Ref,
+            RouteKey = "PUT /entities/{id}",
+            Target = $"integrations/{entitiesIntegration.Ref}",
             AuthorizationType = "CUSTOM",
             AuthorizerId = apiKeyAuthorizer.Ref
         });
@@ -290,11 +298,11 @@ public sealed class FullviewStack : Stack
             SourceArn = $"arn:aws:execute-api:{Region}:{Account}:{httpApi.Ref}/*/*/health"
         });
 
-        syncFunction.AddPermission("ApiGatewayInvoke", new Permission
+        entitiesFunction.AddPermission("ApiGatewayInvoke", new Permission
         {
             Principal = new Amazon.CDK.AWS.IAM.ServicePrincipal("apigateway.amazonaws.com"),
             Action = "lambda:InvokeFunction",
-            SourceArn = $"arn:aws:execute-api:{Region}:{Account}:{httpApi.Ref}/*/*/sync"
+            SourceArn = $"arn:aws:execute-api:{Region}:{Account}:{httpApi.Ref}/*/*/entities*"
         });
 
         _ = new CfnOutput(this, "HttpApiUrl", new CfnOutputProps
@@ -381,11 +389,11 @@ public sealed class FullviewStack : Stack
         });
         errorAlarm.AddAlarmAction(new SnsAction(alertTopic));
 
-        var syncErrorAlarm = new Alarm(this, "SyncFunctionErrorAlarm", new AlarmProps
+        var syncErrorAlarm = new Alarm(this, "EntitiesFunctionErrorAlarm", new AlarmProps
         {
-            AlarmName = $"{settings.ResourcePrefix}sync-errors",
-            AlarmDescription = "Sync Lambda errored — check for a bad mutation or a DynamoDB problem.",
-            Metric = syncFunction.MetricErrors(new MetricOptions
+            AlarmName = $"{settings.ResourcePrefix}entities-errors",
+            AlarmDescription = "Entities Lambda errored — check for a bad mutation or a DynamoDB problem.",
+            Metric = entitiesFunction.MetricErrors(new MetricOptions
             {
                 Period = Duration.Minutes(5),
                 Statistic = Stats.SUM
@@ -400,7 +408,7 @@ public sealed class FullviewStack : Stack
         var authorizerErrorAlarm = new Alarm(this, "AuthorizerFunctionErrorAlarm", new AlarmProps
         {
             AlarmName = $"{settings.ResourcePrefix}authorizer-errors",
-            AlarmDescription = "Authorizer Lambda errored — likely can't read the API key from SSM; /sync will fail closed for everyone.",
+            AlarmDescription = "Authorizer Lambda errored — likely can't read the API key from SSM; /entities will fail closed for everyone.",
             Metric = authorizerFunction.MetricErrors(new MetricOptions
             {
                 Period = Duration.Minutes(5),

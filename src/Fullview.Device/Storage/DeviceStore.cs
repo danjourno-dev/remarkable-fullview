@@ -130,29 +130,30 @@ public sealed class DeviceStore
         command.ExecuteNonQuery();
     }
 
-    /// <summary>Applies a `/sync` response's delta with the same last-write-wins rule as the
-    /// server (B5): a pulled row only overwrites the local copy if it isn't older. Bypasses
-    /// the outbox — these are remote writes, not local mutations to push back out.</summary>
-    public void ApplyRemoteDelta(IReadOnlyList<SyncEntity> delta)
+    /// <summary>Applies a `GET /entities` full-list response with the same last-write-wins
+    /// rule as the server: a pulled row only overwrites the local copy if it's strictly
+    /// newer. Bypasses the outbox — these are remote writes, not local mutations to push
+    /// back out. Returns whether anything actually changed, since a full list is returned
+    /// on every sync regardless of whether the caller has anything new to show.</summary>
+    public bool ApplyRemoteSnapshot(IReadOnlyList<SyncEntity> entities)
     {
-        if (delta.Count == 0)
-        {
-            return;
-        }
+        var changed = false;
 
         using var transaction = _database.Connection.BeginTransaction();
-        foreach (var entity in delta)
+        foreach (var entity in entities)
         {
-            if (GetExistingUpdatedAt(transaction, entity) is { } existing && existing > entity.UpdatedAt)
+            if (GetExistingUpdatedAt(transaction, entity) is { } existing && existing >= entity.UpdatedAt)
             {
                 continue;
             }
 
+            changed = true;
             string json = JsonSerializer.Serialize(entity, DeviceJson.Options);
             UpsertEntityRow(transaction, entity, json);
         }
 
         transaction.Commit();
+        return changed;
     }
 
     private DateTimeOffset? GetExistingUpdatedAt(SqliteTransaction transaction, SyncEntity entity)

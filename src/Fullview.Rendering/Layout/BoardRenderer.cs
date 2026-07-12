@@ -27,8 +27,9 @@ public static class BoardRenderer
         Canvas.Composite(image, header, 0, 0);
 
         var stripData = NowNextCalculator.Compute(state.AgendaEvents, state.Now);
-        var strip = NowNextStrip.Render(width, stripData);
+        var (strip, syncButtonBounds) = NowNextStrip.Render(width, stripData);
         Canvas.Composite(image, strip, 0, Header.Height);
+        regions.Add(new HitRegion(syncButtonBounds.WithOffset(0, Header.Height), new BoardAction.SyncNow()));
 
         int bodyY = Header.Height + NowNextStrip.Height;
         int bodyHeight = height - bodyY - Footer.Height;

@@ -50,29 +50,6 @@ public class DeviceSettingsTests : IDisposable
     }
 
     [Fact]
-    public void GetSyncCursor_DefaultsToNull_WhenNeverSet()
-    {
-        Assert.Null(_settings.GetSyncCursor());
-    }
-
-    [Fact]
-    public void SetSyncCursor_ThenGetSyncCursor_RoundTrips()
-    {
-        _settings.SetSyncCursor("cursor-123");
-
-        Assert.Equal("cursor-123", _settings.GetSyncCursor());
-    }
-
-    [Fact]
-    public void SetSyncCursor_Twice_UpdatesRatherThanThrowing()
-    {
-        _settings.SetSyncCursor("cursor-1");
-        _settings.SetSyncCursor("cursor-2");
-
-        Assert.Equal("cursor-2", _settings.GetSyncCursor());
-    }
-
-    [Fact]
     public void GetLastSyncedAt_DefaultsToNull_WhenNeverSet()
     {
         Assert.Null(_settings.GetLastSyncedAt());

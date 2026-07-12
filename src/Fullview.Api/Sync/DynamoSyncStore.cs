@@ -5,16 +5,14 @@ using Fullview.Domain.Entities;
 
 namespace Fullview.Api.Sync;
 
-/// <summary>Single-table store (B5): `pk`/`sk` for point lookups, `gsi1pk`/`gsi1sk` for the
-/// delta query ordered by UpdatedAt. Entities are stored whole as a `data` JSON blob (via
+/// <summary>Single-table store (B5): `pk`/`sk` for point lookups and for the full-list read
+/// (a plain partition-key equality query — the whole user's data lives in one partition, so
+/// no secondary index is needed). Entities are stored whole as a `data` JSON blob (via
 /// <see cref="SyncEntity"/>'s polymorphic serialization) alongside a handful of queryable
 /// scalar attributes — this avoids hand-mapping eight different entity shapes onto
 /// DynamoDB attributes individually.</summary>
 public sealed class DynamoSyncStore : ISyncStore
 {
-    private const string Gsi1Name = "gsi1";
-    private static readonly string MinCursor = DateTimeOffset.MinValue.ToString("O");
-
     private readonly Table _table;
 
     public DynamoSyncStore(IAmazonDynamoDB client, string tableName)
@@ -40,47 +38,32 @@ public sealed class DynamoSyncStore : ISyncStore
             ["context"] = entity.Context.ToString(),
             ["updatedAt"] = updatedAt,
             ["deleted"] = entity.Deleted,
-            ["data"] = JsonSerializer.Serialize<SyncEntity>(entity, SyncJson.Options),
-            ["gsi1pk"] = UserPartition.Pk,
-            ["gsi1sk"] = updatedAt
+            ["data"] = JsonSerializer.Serialize<SyncEntity>(entity, SyncJson.Options)
         };
 
         await _table.PutItemAsync(document, ct);
     }
 
-    public async Task<(IReadOnlyList<SyncEntity> Items, string Cursor)> QueryDeltaAsync(string? cursor, CancellationToken ct)
+    public async Task<IReadOnlyList<SyncEntity>> GetAllAsync(CancellationToken ct)
     {
-        var since = string.IsNullOrEmpty(cursor) ? MinCursor : cursor;
-
         var config = new QueryOperationConfig
         {
-            IndexName = Gsi1Name,
             KeyExpression = new Expression
             {
-                ExpressionStatement = "gsi1pk = :pk and gsi1sk > :since",
-                ExpressionAttributeValues =
-                {
-                    [":pk"] = UserPartition.Pk,
-                    [":since"] = since
-                }
+                ExpressionStatement = "pk = :pk",
+                ExpressionAttributeValues = { [":pk"] = UserPartition.Pk }
             }
         };
-
         var search = _table.Query(config);
         var items = new List<SyncEntity>();
-        string newCursor = since;
 
         do
         {
             var page = await search.GetNextSetAsync(ct);
-            foreach (var document in page)
-            {
-                items.Add(Deserialize(document));
-                newCursor = document["updatedAt"].AsString();
-            }
+            items.AddRange(page.Select(Deserialize));
         } while (!search.IsDone);
 
-        return (items, cursor is null && items.Count == 0 ? MinCursor : newCursor);
+        return items;
     }
 
     private static SyncEntity Deserialize(Document document)

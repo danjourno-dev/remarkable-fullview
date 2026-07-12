@@ -23,6 +23,13 @@ public abstract record BoardAction
     /// way OpenRecipe does.</summary>
     public sealed record NavigateToScreen(ScreenKind Screen) : BoardAction;
 
-    /// <summary>Manual sync, triggered by tapping the footer's sync-status text (Stage 5).</summary>
+    /// <summary>Manual sync, triggered by tapping the footer's sync-status text or the
+    /// Now/Next strip's sync button (Stage 5) — always gives immediate feedback, unlike
+    /// <see cref="BackgroundSync"/>.</summary>
     public sealed record SyncNow : BoardAction;
+
+    /// <summary>Auto-triggered sync (wifi reconnect, fallback timer) — distinct from
+    /// <see cref="SyncNow"/> so Program.cs can skip a full render/e-ink refresh when nothing
+    /// changed, instead of always giving user-facing feedback.</summary>
+    public sealed record BackgroundSync : BoardAction;
 }

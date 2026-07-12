@@ -163,16 +163,16 @@ public class DeviceStoreTests : IDisposable
     }
 
     [Fact]
-    public void ApplyRemoteDelta_NewEntity_InsertsIt()
+    public void ApplyRemoteSnapshot_NewEntity_InsertsIt()
     {
-        _store.ApplyRemoteDelta(new[] { MakeTodo("t1", "From server") });
+        _store.ApplyRemoteSnapshot(new[] { MakeTodo("t1", "From server") });
 
         var todo = Assert.Single(_store.Query<Todo>());
         Assert.Equal("From server", todo.Title);
     }
 
     [Fact]
-    public void ApplyRemoteDelta_RemoteNewerThanLocal_Overwrites()
+    public void ApplyRemoteSnapshot_RemoteNewerThanLocal_Overwrites()
     {
         var local = MakeTodo("t1", "Local title");
         local.UpdatedAt = DateTimeOffset.UtcNow;
@@ -180,14 +180,14 @@ public class DeviceStoreTests : IDisposable
 
         var remote = MakeTodo("t1", "Remote title");
         remote.UpdatedAt = local.UpdatedAt.AddMinutes(1);
-        _store.ApplyRemoteDelta(new[] { remote });
+        _store.ApplyRemoteSnapshot(new[] { remote });
 
         var todo = Assert.Single(_store.Query<Todo>());
         Assert.Equal("Remote title", todo.Title);
     }
 
     [Fact]
-    public void ApplyRemoteDelta_RemoteOlderThanLocal_DoesNotOverwrite()
+    public void ApplyRemoteSnapshot_RemoteOlderThanLocal_DoesNotOverwrite()
     {
         var local = MakeTodo("t1", "Local title");
         local.UpdatedAt = DateTimeOffset.UtcNow;
@@ -195,16 +195,16 @@ public class DeviceStoreTests : IDisposable
 
         var remote = MakeTodo("t1", "Remote title");
         remote.UpdatedAt = local.UpdatedAt.AddMinutes(-1);
-        _store.ApplyRemoteDelta(new[] { remote });
+        _store.ApplyRemoteSnapshot(new[] { remote });
 
         var todo = Assert.Single(_store.Query<Todo>());
         Assert.Equal("Local title", todo.Title);
     }
 
     [Fact]
-    public void ApplyRemoteDelta_DoesNotQueueAnOutboxRow()
+    public void ApplyRemoteSnapshot_DoesNotQueueAnOutboxRow()
     {
-        _store.ApplyRemoteDelta(new[] { MakeTodo("t1", "From server") });
+        _store.ApplyRemoteSnapshot(new[] { MakeTodo("t1", "From server") });
 
         Assert.Equal(0, _store.OutboxCount());
     }

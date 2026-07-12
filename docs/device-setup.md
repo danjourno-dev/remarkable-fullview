@@ -66,6 +66,36 @@ launched app's own stdout. `tail -f
 /home/root/xovi/exthome/appload/fullview/fullview.log` while using the app on
 the device is the fastest way to see what's actually slow.
 
+### Diagnostic logging
+
+Beyond the always-on lines above, `ENABLE_LOGGING` (see the runtime configuration
+table above) turns on extra diagnostic output aimed at debugging sync/startup
+issues without a rebuild: the resolved `FULLVIEW_*` env vars at startup (the API
+key is only reported as set/not-set, never its value), `SyncEngine`'s
+outbox/entity counts on every sync attempt, and when the wifi-reconnect listener
+or the 5-minute fallback timer fires a background sync (see "Background sync
+timer" below). It's off by default so normal operation doesn't grow
+`fullview.log` unnecessarily.
+
+Turn it on by creating `/etc/fullview.env` on the device (same device-specific,
+never-committed pattern as `/etc/fullview-sync.env` below):
+
+```
+ENABLE_LOGGING=1
+```
+
+`run.sh` sources both `/etc/fullview-sync.env` and `/etc/fullview.env` (with
+`set -a`, so plain `VAR=value` lines are exported into the process without
+needing an explicit `export` keyword) before starting the foreground app, and
+`fullview-sync.service` reads both via `EnvironmentFile=`, so one
+`ENABLE_LOGGING` setting covers the foreground app and the background timer's
+`sync-once` runs. If the app isn't picking up config from either env file at
+all (e.g. sync stays disabled despite `FULLVIEW_API_BASE_URL` looking right in
+the file), check that `run.sh` on the device actually has the `set -a` line —
+without it, `.` sourcing a plain `VAR=value` file only creates shell-local
+variables that `exec` silently drops, which looks exactly like a sync bug but
+isn't one.
+
 The publish script passes `-p:PublishReadyToRun=true`, which ahead-of-time
 compiles the app and its dependencies (ImageSharp in particular) to native ARM
 code at publish time instead of JIT-compiling them on first use. This is
@@ -82,10 +112,11 @@ The app reads these optional environment variables at startup:
 | `FULLVIEW_DB_PATH` | `<binary's directory>/fullview.db` | SQLite store location |
 | `FULLVIEW_TOUCH_DEVICE` | `/dev/input/event2` | evdev node for the capacitive touchscreen |
 | `FULLVIEW_BUTTON_DEVICE` | `/dev/input/event1` | evdev node for the physical buttons — the right-hand button switches Personal/Work mode |
-| `FULLVIEW_DEVICE_ID` | `device` | this device's id in sync payloads (`UpdatedBy`, `/sync` request) |
-| `FULLVIEW_API_BASE_URL` | unset | base URL of the deployed `/sync` API (e.g. `https://<id>.execute-api.<region>.amazonaws.com`); sync is disabled entirely if unset |
-| `FULLVIEW_API_KEY` | unset | the shared API key checked by API Gateway's authorizer (see "API authentication" below); every `/sync` call is rejected with 401 if unset or wrong, which the app treats like any other sync failure |
+| `FULLVIEW_DEVICE_ID` | `device` | this device's id in sync payloads (`UpdatedBy`, `PUT /entities/{id}`) |
+| `FULLVIEW_API_BASE_URL` | unset | base URL of the deployed `/entities` API (e.g. `https://<id>.execute-api.<region>.amazonaws.com`); sync is disabled entirely if unset |
+| `FULLVIEW_API_KEY` | unset | the shared API key checked by API Gateway's authorizer (see "API authentication" below); every `/entities` call is rejected with 401 if unset or wrong, which the app treats like any other sync failure |
 | `FULLVIEW_MODE` | `app` | `app` (default, foreground UI) or `sync-once` (headless outbox drain, see below) |
+| `ENABLE_LOGGING` | unset (off) | `1` or `true` turns on extra diagnostic logging (env var resolution at startup, sync engine internals, background-sync trigger firings); see "Diagnostic logging" below |
 
 The touch default was confirmed on hardware via `cat /proc/bus/input/devices`:
 event0 is the Wacom pen digitizer, event1 is `gpio-keys` (the physical side
@@ -115,9 +146,21 @@ restarting service would fight AppLoad for the same qtfb registration.
 `fullview-sync.timer` — that periodically runs the same binary in
 `FULLVIEW_MODE=sync-once`. That mode returns before ever opening `/dev/fb0`,
 qtfb, or evdev, so it can't contend with the AppLoad-launched foreground app
-for the framebuffer; it just drains the local outbox to `/sync` in the
-background, roughly every 30 minutes, and does nothing at all (no network
-call) if there's nothing queued to push.
+for the framebuffer; it just drains the local outbox via `PUT /entities/{id}`
+in the background, roughly every 30 minutes, and does nothing at all (no
+network call) if there's nothing queued to push.
+
+The foreground app (the one AppLoad launches) has its own, separate
+convergence mechanism so it doesn't have to wait on this systemd timer or the
+next app open: it subscribes to `NetworkChange.NetworkAddressChanged` and
+triggers an immediate sync as soon as the network comes back (debounced to
+once per 10s, since reconnect can fire that event several times in a burst),
+and falls back to a plain in-process 5-minute timer for "wifi never dropped
+but the app's been open a while." Both call the same `SyncEngine.SyncOnceAsync`
+as the manual sync button/footer tap, just silently — no full render/e-ink
+refresh happens unless something actually changed. Tap the sync button on the
+Now/Next strip (or the footer's "SYNCED HH:mm" text) for an immediate,
+always-visible sync instead of waiting on either of these.
 
 Before deploying, create `/etc/fullview-sync.env` on the device by hand over
 SSH (it's device-specific, so the deploy script never writes it and it's
@@ -150,7 +193,7 @@ ssh root@10.11.99.1 systemctl start fullview-sync.service
 
 ## API authentication
 
-`/sync` is protected by a REQUEST authorizer on the HTTP API: every call must
+`/entities` is protected by a REQUEST authorizer on the HTTP API: every call must
 carry an `x-api-key` header matching a single shared secret held as a
 SecureString in SSM Parameter Store. This is deliberately the simplest thing
 that works for a single-user app (see docs/plans/implementation.md) — there's

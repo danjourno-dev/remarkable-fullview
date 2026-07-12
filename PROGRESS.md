@@ -736,6 +736,21 @@ still needed to close Stage 5.
 - **Stage 5 — `/sync` still has no auth.** Unchanged from the Stage 2
   decision (see above); `SyncClient` sends no auth header. Out of scope
   for Stage 5.
+- **Session 17 — dropped the cursor entirely instead of making it
+  per-writer.** Considered scoping the cursor per `UpdatedBy`/device id
+  instead of removing it, but that still leaves every writer's clock as a
+  single point of failure for its own cursor, and adds a cursor per known
+  writer to reason about. A full `GET /entities` on every sync is simpler
+  and, since it's O(total entities) rather than O(delta), cheap enough at
+  this app's scale (single user, low hundreds of rows) to not be worth the
+  complexity trade.
+- **Session 17 — remote overwrites local only on strictly-newer timestamps,
+  not `>=`.** The old rule (`remote.updatedAt >= existing.updatedAt`, remote
+  wins ties) meant a device's own just-pushed write, echoed back in the very
+  next `GET /entities`, could re-apply itself — harmless when the payload is
+  identical, but fragile in general. Switching to strictly-newer-only makes
+  `ApplyRemoteSnapshot`/`applyRemoteSnapshot` a true no-op when nothing
+  upstream has actually changed.
 
 ## Known issues / blockers
 
@@ -1162,5 +1177,57 @@ still needed to close Stage 5.
   stack, and checkpoint 6.5.3's live verification against the deployed
   Lambda. Stage 6.6's Outlook-mirror recipe doc is still unwritten — out of
   scope for this session (Dan asked specifically for 6.5.1–6.5.3).
+- Changes staged, not committed — Dan reviews and commits manually per
+  standing instruction.
+
+### 2026-07-12 — Session 17 (Replace cursor-based `/sync` with `/entities` GET/POST/PUT)
+
+- Dan reported the device log showing `delta=0 item(s)` on every sync despite
+  believing server data had changed, and pointed out that records written
+  out-of-band (the Stage 6.5 calendar puller) never reached the device. Root
+  cause, confirmed by reading the code rather than guessed: the old `/sync`
+  protocol tracked progress with a single global cursor (`gsi1sk`, a
+  DynamoDB GSI ordered by every entity's `UpdatedAt`) shared across all
+  writers — device wall clock, web browser clock, calendar-pull Lambda
+  clock. A reMarkable 1 has no battery-backed RTC, so a single fast-clocked
+  device write could push the cursor ahead of real time and permanently hide
+  every subsequently-written (but earlier-timestamped) row from that device,
+  including rows it never wrote itself.
+- Replaced the single `POST /sync` endpoint with three: `GET /entities`
+  (full list, called after any queued outbox mutations are pushed — bringing
+  the local DB up to date has no cursor to get wrong), `PUT /entities/{id}`
+  (idempotent LWW upsert, one call per outbox item), `POST /entities` (create,
+  rejects an id that already exists). Dropped the `gsi1` GSI entirely —
+  `DynamoSyncStore.GetAllAsync` does a plain `pk = :pk` query.
+- `SyncEngine` (device and, mirrored, `syncEngine.ts` on the web) now drains
+  the outbox one `PUT` at a time, deleting each outbox row only after its own
+  PUT is acknowledged (a mid-drain network drop loses nothing already
+  acknowledged), then does one `GET /entities` and applies it wholesale via
+  `ApplyRemoteSnapshot`/`applyRemoteSnapshot` — skips a row unless it's
+  *strictly* newer than what's stored locally, so a device's own echoed
+  write can't regress local state on a timestamp tie. This changed the web
+  store's previous tie-break rule (remote used to win ties); made it match
+  the device side for consistency.
+- Touched every layer: `Fullview.Domain` (deleted `SyncRequest`/
+  `SyncResponse`), `Fullview.Api` (`ISyncStore`, `SyncService`,
+  `DynamoSyncStore`, new `EntitiesFunction` replacing `SyncFunction`),
+  `Fullview.Infra` (CDK routes, dropped `gsi1`, CORS `AllowMethods` gained
+  `PUT`), `Fullview.Device` (`SyncClient`, `SyncEngine`, `DeviceStore`,
+  `DeviceSettings` — dropped the cursor setting entirely), `Fullview.Web`
+  (`syncClient.ts`, `syncEngine.ts`, `store.ts` — same cursor removal), and
+  `tools/seed-data` (one `PUT /entities/{id}` per seeded entity instead of a
+  single batched `/sync` call).
+- Test coverage: rewrote `Fullview.Api.Tests` (`SyncServiceTests`,
+  `InMemorySyncStore`, `SyncConvergenceIntegrationTests`) against the new
+  `GetAllAsync`/`CreateAsync`/`ApplyMutationAsync` shape; rewrote
+  `Fullview.Device.Tests/Sync/SyncEngineTests.cs` with a new case proving a
+  mid-drain `PUT` failure leaves the rest of the outbox intact; updated
+  `DeviceStoreTests`/`DeviceSettingsTests` for the rename/removal; updated
+  `store.test.ts` on the web side, including the tie-break rule change.
+  `dotnet build`/`test`/`format --verify-no-changes` and the web app's
+  `vitest run`/`tsc -b` all pass.
+- Not yet done: a real `cdk deploy` of the updated stack (the old `/sync`
+  route and `gsi1` index disappear entirely — not backwards compatible, so
+  device and web must both ship the new client build alongside the deploy).
 - Changes staged, not committed — Dan reviews and commits manually per
   standing instruction.

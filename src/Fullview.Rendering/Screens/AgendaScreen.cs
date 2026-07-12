@@ -17,7 +17,9 @@ public static class AgendaScreen
     private const int RowSize = 33;
     private const int RowHeight = 105;
 
-    public static ScreenRenderResult Render(int width, int height, IReadOnlyList<AgendaEvent> events)
+    private const byte PastEventColor = 160;
+
+    public static ScreenRenderResult Render(int width, int height, IReadOnlyList<AgendaEvent> events, DateTimeOffset now)
     {
         var image = new Image<L8>(width, height, new L8(Canvas.White));
 
@@ -41,8 +43,9 @@ public static class AgendaScreen
             string time = ev.IsAllDay ? "ALL DAY" : ev.Start.ToLocalTime().ToString("HH:mm");
             string marker = ev.Source == AgendaEventSource.GoogleCalendar ? "*" : "";
             string line = $"{time} {ev.Title}{marker}";
+            byte color = !ev.IsAllDay && ev.End <= now ? PastEventColor : Canvas.Black;
 
-            AppFont.DrawText(image, line, Margin, y, rowFont, Canvas.Black);
+            AppFont.DrawText(image, line, Margin, y, rowFont, color);
             y += RowHeight;
             Canvas.DrawDivider(image, Margin, y - 8, rowWidth);
         }

@@ -90,6 +90,51 @@ public class BoardRendererTests
     }
 
     [Fact]
+    public void Render_AgendaScreen_ExcludesEventsNotOnToday()
+    {
+        var today = DateOnly.FromDateTime(new DateTimeOffset(2026, 7, 9, 10, 0, 0, TimeSpan.Zero).LocalDateTime);
+        var todayStart = new DateTimeOffset(today.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero).AddHours(9);
+        var state = EmptyState(SyncContext.Work, ScreenKind.Agenda) with
+        {
+            AgendaEvents = new[]
+            {
+                new AgendaEvent
+                {
+                    Id = "today", Context = SyncContext.Work, UpdatedAt = todayStart, UpdatedBy = "test",
+                    Title = "Today meeting", Start = todayStart, End = todayStart.AddHours(1)
+                },
+                new AgendaEvent
+                {
+                    Id = "yesterday", Context = SyncContext.Work, UpdatedAt = todayStart, UpdatedBy = "test",
+                    Title = "Stray dev event", Start = todayStart.AddDays(-1), End = todayStart.AddDays(-1).AddHours(1)
+                }
+            }
+        };
+
+        var result = BoardRenderer.Render(1404, 1872, state);
+
+        int bodyY = Fullview.Rendering.Layout.Header.Height + Fullview.Rendering.Layout.NowNextStrip.Height;
+        const int margin = 24;
+        const int rowHeight = 105;
+        int secondRowY = bodyY + margin + 32 + margin + rowHeight;
+
+        byte darkest = 255;
+        for (int py = secondRowY; py < secondRowY + rowHeight; py++)
+        {
+            for (int px = margin; px < 1404 - margin; px++)
+            {
+                byte value = result.Image[px, py].PackedValue;
+                if (value < darkest)
+                {
+                    darkest = value;
+                }
+            }
+        }
+
+        Assert.Equal(255, darkest);
+    }
+
+    [Fact]
     public void Render_UnknownRecipeId_DoesNotThrow()
     {
         var state = EmptyState(SyncContext.Personal, ScreenKind.Recipe) with { OpenRecipeId = "missing" };

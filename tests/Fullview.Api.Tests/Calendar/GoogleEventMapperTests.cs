@@ -81,4 +81,32 @@ public class GoogleEventMapperTests
 
         Assert.NotEqual(forWork, forPersonal);
     }
+
+    [Fact]
+    public void Map_SameICalUidDifferentGoogleId_ProducesSameEntityId()
+    {
+        // Simulates the Work mirror's wipe-and-rebuild: Outlook keeps the iCalUID stable
+        // but Google mints a new internal id on every recreate.
+        var beforeRebuild = new Event
+        {
+            Id = "abc123",
+            ICalUID = "outlook-uid-1@outlook.com",
+            Summary = "Stand-up",
+            Start = new EventDateTime { DateTimeDateTimeOffset = DateTimeOffset.Parse("2026-07-13T09:00:00+01:00") },
+            End = new EventDateTime { DateTimeDateTimeOffset = DateTimeOffset.Parse("2026-07-13T09:15:00+01:00") }
+        };
+        var afterRebuild = new Event
+        {
+            Id = "xyz789",
+            ICalUID = "outlook-uid-1@outlook.com",
+            Summary = "Stand-up",
+            Start = new EventDateTime { DateTimeDateTimeOffset = DateTimeOffset.Parse("2026-07-13T09:00:00+01:00") },
+            End = new EventDateTime { DateTimeDateTimeOffset = DateTimeOffset.Parse("2026-07-13T09:15:00+01:00") }
+        };
+
+        var mappedBefore = GoogleEventMapper.Map(beforeRebuild, "work-cal", SyncContext.Work, Now);
+        var mappedAfter = GoogleEventMapper.Map(afterRebuild, "work-cal", SyncContext.Work, Now);
+
+        Assert.Equal(mappedBefore!.Id, mappedAfter!.Id);
+    }
 }

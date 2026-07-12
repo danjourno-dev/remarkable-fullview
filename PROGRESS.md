@@ -1115,3 +1115,52 @@ still needed to close Stage 5.
   Stage 6 Done criteria: "Dan manages all data from phone browser; syncs to
   device") — add a todo/shopping item from the web, confirm it shows up on
   the device after its next sync, and vice versa.
+
+### 2026-07-12 — Session 16 (Stage 6.5, Google Calendar sync)
+
+- Built the Stage 6.5 puller end to end: `CalendarPullFunction`
+  (`src/Fullview.Api/Functions/CalendarPullFunction.cs`) on a 15-minute
+  EventBridge schedule, context-agnostic per the plan's design rule — the
+  only place Work/Personal tagging happens is the calendar config list, not
+  code. New `Fullview.Api/Calendar/` folder: `CalendarConfig` (config-list
+  entry), `GoogleOAuthCredentials` (SSM JSON shape), `GoogleEventMapper`
+  (pure, unit-tested — Google `Event` → `AgendaEvent`, handles all-day
+  `date`-only events, `status=cancelled` → tombstone, deterministic
+  `google-{calendarId}-{eventId}` entity id so repeated pulls upsert instead
+  of duplicating), `CalendarSyncStateStore` (per-calendar `nextSyncToken` in
+  the same DynamoDB table under a `CALSYNC` pk, separate from the
+  device/web-visible sync entities), and `GoogleCalendarPullService`
+  (orchestrates: incremental sync via `syncToken`, falls back to a full
+  `now-1d`..`now+8d` window on `410 Gone`, one calendar's failure doesn't
+  stop the rest of the sweep).
+- Three SSM parameters, following the exact manual-creation pattern from
+  Session 14's API key (CloudFormation can't create `SecureString`, and the
+  calendar list is deliberately config-not-code): `/fullview-google-oauth-client`
+  (SecureString JSON, checkpoint 6.5.1), `/fullview-google-refresh-token`
+  (SecureString, checkpoint 6.5.2), `/fullview-google-calendars` (plain
+  String JSON list of `{id, context}`). CDK only grants
+  `ssm:GetParameter`/scoped `kms:Decrypt`, never creates the values — new
+  "Google Calendar sync" section in `docs/device-setup.md` has the exact
+  `aws ssm put-parameter` commands.
+- New `tools/google-auth` console app (added to `Fullview.sln` under the
+  `tools` solution folder, alongside `SeedData`) for checkpoint 6.5.2: reads
+  the client id/secret at the prompt, opens the browser via
+  `GoogleWebAuthorizationBroker.AuthorizeAsync` with scope
+  `calendar.readonly`, prints the refresh token for Dan to paste into SSM —
+  never written to disk.
+- `Google.Apis.Calendar.v3` / `Google.Apis.Auth` (1.68.0.3536 / 1.68.0) added
+  to `Fullview.Api` and the new tool. `dotnet build`, `dotnet test`,
+  `dotnet format --verify-no-changes`, and `cdk synth` all pass; confirmed
+  the synthesized template has the new Lambda, the `rate(15 minutes)`
+  EventBridge rule, the scoped IAM policy on the three parameter ARNs, and
+  an error alarm wired to the existing SNS topic.
+- Not yet done (needs Dan): checkpoint 6.5.1 (create the OAuth client in
+  Google Cloud Console — Dan reports this is already done, client id/secret
+  in hand — and put it into SSM per the new docs section), checkpoint 6.5.2
+  (run `tools/google-auth`, store the refresh token), the calendar-id config
+  parameter (needs Dan's real calendar ids), a real `cdk deploy` of this
+  stack, and checkpoint 6.5.3's live verification against the deployed
+  Lambda. Stage 6.6's Outlook-mirror recipe doc is still unwritten — out of
+  scope for this session (Dan asked specifically for 6.5.1–6.5.3).
+- Changes staged, not committed — Dan reviews and commits manually per
+  standing instruction.

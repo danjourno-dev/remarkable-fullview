@@ -187,3 +187,89 @@ accepted v1 tradeoff (single user, Cognito is v2). Locally, put it in
 the **`FULLVIEW_API_KEY` GitHub Actions secret** (Settings → Secrets and
 variables → Actions → New repository secret) — set it to the same value as
 the SSM parameter above.
+
+## Google Calendar sync (Stage 6.5)
+
+`CalendarPullFunction` mirrors one or more Google calendars into the board's
+agenda every 15 minutes (EventBridge schedule). It is context-agnostic — a
+calendar's Work/Personal tagging comes entirely from the config parameter
+below, never from event content. Like the API key above, none of this ever
+lives in the repo or GitHub — three parameters, all created by hand.
+
+### 1. Google Cloud OAuth client (checkpoint 6.5.1)
+
+1. Google Cloud Console → create a project (e.g. `remarkable-fullview-personal`).
+2. **APIs & Services → Library** → enable the **Google Calendar API**.
+3. **APIs & Services → OAuth consent screen** → User type **External**.
+   Publishing status stays **Testing** with yourself as the sole test user —
+   this avoids Google's app-verification process entirely, and a
+   Testing-mode refresh token works fine for single-user use (it just needs
+   re-consenting roughly every 7 days *unless* you're listed as a test user,
+   in which case it doesn't expire).
+4. **Credentials → Create credentials → OAuth client ID** → application type
+   **Desktop app** (no redirect URI to host).
+5. Put the client id and secret into SSM as a single JSON SecureString:
+
+   ```bash
+   aws ssm put-parameter \
+     --name /fullview-google-oauth-client \
+     --type SecureString \
+     --value '{"clientId":"<client id>.apps.googleusercontent.com","clientSecret":"<client secret>"}'
+   ```
+
+### 2. One-time consent + refresh token (checkpoint 6.5.2)
+
+Run the console app in `tools/google-auth/` once, from a machine with a
+browser (this is a local dev-time step, not part of the deploy pipeline):
+
+```bash
+dotnet run --project tools/google-auth
+```
+
+It prompts for the client id/secret from step 1, opens your browser to
+consent (scope is **`calendar.readonly`** — read-only, so even a compromised
+token can't alter your calendars), then prints a refresh token. Put it
+straight into SSM — do not save it to a file:
+
+```bash
+aws ssm put-parameter \
+  --name /fullview-google-refresh-token \
+  --type SecureString \
+  --value "<refresh token printed above>"
+```
+
+One consent covers every calendar on the account, which is why the
+two-calendar (Personal + Work) model below costs nothing extra.
+
+### 3. Calendar → context mapping
+
+Not a secret — a plain String parameter, and the only place the Work/Personal
+mapping lives. Adding, removing, or re-tagging a calendar is a config change
+here, never a code change:
+
+```bash
+aws ssm put-parameter \
+  --name /fullview-google-calendars \
+  --type String \
+  --value '[{"id":"you@gmail.com","context":"Personal"},{"id":"<work-mirror calendar id>","context":"Work"}]'
+```
+
+Calendar ids are visible in Google Calendar → Settings → *(calendar name)* →
+"Integrate calendar" → **Calendar ID**.
+
+### 4. Live verification (checkpoint 6.5.3)
+
+Add a test event to your primary Google calendar and confirm it appears on
+the board in **Personal** mode within ~15 min. Then confirm a real event on
+the Work-mapped calendar appears in **Work** mode. Finally, confirm both show
+up in the Now/Next strip regardless of which mode the board is currently in
+(the strip always renders cross-context — see B3). Pulled events render with
+a subtle marker and no tap-to-edit affordance, since remarkable-fullview
+never writes back to Google.
+
+**Forking this repo?** Bring your own Google Cloud project, your own OAuth
+client, and your own refresh token in your own SSM — none of the above is
+shared or reusable across accounts. The Outlook-mirroring flow that populates
+a `Work (mirror)` calendar (documented separately) is an optional recipe, not
+a dependency: the puller neither knows nor cares how a calendar got
+populated.

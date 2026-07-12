@@ -9,13 +9,14 @@ on-device.
 
 ```
 npm install
-cp .env.example .env.local   # fill in VITE_API_BASE_URL / VITE_API_KEY
+cp .env.example .env.local   # fill in VITE_API_BASE_URL
 npm run dev
 ```
 
-`VITE_API_KEY` ships the shared single-user v1 API key to the browser bundle — see
-`docs/device-setup.md`'s "API authentication" section for why that's an accepted
-v1 tradeoff (Cognito is v2).
+The API key is never baked into the build — a public CloudFront-hosted SPA can't
+keep a build-time secret out of the JS it ships to every visitor. Instead the app
+shows a login screen (`AuthGate`) that asks for the API key at runtime and stores
+it in `localStorage`; see `docs/device-setup.md`'s "API authentication" section.
 
 ## Build / deploy
 

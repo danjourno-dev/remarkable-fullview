@@ -9,4 +9,3 @@ function requireEnv(key: string): string {
 }
 
 export const apiBaseUrl = requireEnv("VITE_API_BASE_URL");
-export const apiKey = requireEnv("VITE_API_KEY");

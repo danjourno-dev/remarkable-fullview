@@ -17,14 +17,15 @@ public static class HelloWorldScreen
     {
         var image = new Image<L8>(width, height, new L8(White));
 
-        int scale = Math.Max(4, width / 220);
+        float size = Math.Max(28, width / 20f);
         const string text = "HELLO DAN";
-        int textWidth = BitmapFont.MeasureWidth(text, scale);
-        int textHeight = BitmapFont.GlyphHeight * scale;
+        var font = AppFont.Bold(size);
+        int textWidth = AppFont.MeasureWidth(text, font);
+        int textHeight = AppFont.LineHeight(font);
         int x = Math.Max(0, (width - textWidth) / 2);
         int y = Math.Max(0, (height - textHeight) / 2);
 
-        BitmapFont.DrawText(image, text, x, y, scale, Black);
+        AppFont.DrawText(image, text, x, y, font, Black);
         DrawBorder(image, thickness: 8, color: Black);
 
         return image;

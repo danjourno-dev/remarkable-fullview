@@ -12,17 +12,15 @@ public class ScreenSetTests
 
         Assert.DoesNotContain(ScreenKind.Agenda, order);
         Assert.Contains(ScreenKind.Meals, order);
-        Assert.Contains(ScreenKind.Shopping, order);
     }
 
     [Fact]
-    public void NavigationOrder_Work_ExcludesMealsAndShopping()
+    public void NavigationOrder_Work_ExcludesMeals()
     {
         var order = ScreenSet.NavigationOrder(SyncContext.Work);
 
         Assert.Contains(ScreenKind.Agenda, order);
         Assert.DoesNotContain(ScreenKind.Meals, order);
-        Assert.DoesNotContain(ScreenKind.Shopping, order);
     }
 
     [Fact]

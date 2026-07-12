@@ -15,7 +15,7 @@ public static class BoardRenderer
 {
     public const int EdgeNavWidth = 90;
 
-    public static ScreenRenderResult Render(int width, int height, BoardState state)
+    public static ScreenRenderResult Render(int width, int height, BoardState state, string version = "dev")
     {
         var image = new Image<L8>(width, height, new L8(Canvas.White));
         var regions = new List<HitRegion>();
@@ -23,22 +23,25 @@ public static class BoardRenderer
         var today = DateOnly.FromDateTime(state.Now.LocalDateTime);
         string inboxStatus = InboxStatus(state);
 
-        Header.Draw(image, state.Mode, today, inboxStatus);
+        var header = Header.Render(width, state.Mode, today, inboxStatus);
+        Canvas.Composite(image, header, 0, 0);
 
         var stripData = NowNextCalculator.Compute(state.AgendaEvents, state.Now);
-        NowNextStrip.Draw(image, stripData, Header.Height);
+        var strip = NowNextStrip.Render(width, stripData);
+        Canvas.Composite(image, strip, 0, Header.Height);
 
         int bodyY = Header.Height + NowNextStrip.Height;
         int bodyHeight = height - bodyY - Footer.Height;
         var body = RenderBody(width, bodyHeight, state, today);
 
-        Composite(image, body.Image, bodyY);
+        Canvas.Composite(image, body.Image, 0, bodyY);
         foreach (var region in body.Regions)
         {
             regions.Add(region with { Bounds = region.Bounds.WithOffset(0, bodyY) });
         }
 
-        Footer.Draw(image, inboxStatus, state.Mode);
+        var footer = Footer.Render(width, inboxStatus, state.Mode, version);
+        Canvas.Composite(image, footer, 0, height - Footer.Height);
 
         regions.Add(new HitRegion(new Rectangle(0, bodyY, EdgeNavWidth, bodyHeight), new BoardAction.NavigatePrevious()));
         regions.Add(new HitRegion(new Rectangle(width - EdgeNavWidth, bodyY, EdgeNavWidth, bodyHeight), new BoardAction.NavigateNext()));
@@ -53,10 +56,8 @@ public static class BoardRenderer
         return state.CurrentScreen switch
         {
             ScreenKind.Today => TodayScreen.Render(width, height, BuildTodayData(state, today)),
-            ScreenKind.Todos => TodosScreen.Render(width, height, FilterByContext(state.Todos, mode)),
             ScreenKind.Agenda => AgendaScreen.Render(width, height, FilterByContext(state.AgendaEvents, mode)),
             ScreenKind.Meals => MealsScreen.Render(width, height, Active(state.Meals), RecipesById(state)),
-            ScreenKind.Shopping => ShoppingScreen.Render(width, height, Active(state.ShoppingItems)),
             ScreenKind.Recipe => RenderRecipe(width, height, state),
             _ => throw new ArgumentOutOfRangeException(nameof(state), state.CurrentScreen, "Unknown screen kind.")
         };
@@ -68,7 +69,7 @@ public static class BoardRenderer
         if (recipe is null)
         {
             var image = new Image<L8>(width, height, new L8(Canvas.White));
-            BitmapFont.DrawText(image, "RECIPE NOT FOUND", 24, 24, 3, Canvas.Black);
+            AppFont.DrawText(image, "RECIPE NOT FOUND", 24, 24, AppFont.Bold(22), Canvas.Black);
             return new ScreenRenderResult(image, Array.Empty<HitRegion>());
         }
 
@@ -90,8 +91,9 @@ public static class BoardRenderer
 
         var shoppingItems = Active(state.ShoppingItems);
 
-        // Reminders (mockup v4) is cross-context — shown identically regardless of the board's
-        // current mode, split into WORK/PERSONAL subsections, same as NowNextStrip's Now/Next.
+        // Reminders carries both contexts unfiltered; TodayScreen picks the one matching Mode
+        // (Work reminders in Work Ops, Personal in Life Ops) — unlike NowNextStrip's Now/Next,
+        // which stays cross-context.
         var workReminders = activeTodos.Where(t => t.Context == SyncContext.Work).OrderBy(t => t.Completed).ToList();
         var personalReminders = activeTodos.Where(t => t.Context == SyncContext.Personal).OrderBy(t => t.Completed).ToList();
 
@@ -128,19 +130,6 @@ public static class BoardRenderer
 
     private static IReadOnlyDictionary<string, Recipe> RecipesById(BoardState state) =>
         Active(state.Recipes).ToDictionary(r => r.Id);
-
-    private static void Composite(Image<L8> target, Image<L8> source, int originY)
-    {
-        source.ProcessPixelRows(target, (sourceAccessor, targetAccessor) =>
-        {
-            for (int y = 0; y < sourceAccessor.Height; y++)
-            {
-                var sourceRow = sourceAccessor.GetRowSpan(y);
-                var targetRow = targetAccessor.GetRowSpan(originY + y);
-                sourceRow.CopyTo(targetRow);
-            }
-        });
-    }
 }
 
 file static class RectangleExtensions

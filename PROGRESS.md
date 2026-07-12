@@ -399,6 +399,151 @@ close Stage 4. Session 9 reworked the UI to match `docs/mockup-v4.png`
   behaves as expected on the device's kernel/libc. Both need Checkpoint
   4.1.
 
+### 2026-07-12 — Session 10 (Stage 4, UI polish + visual QA)
+
+- Session 9's mockup rework had never actually been rendered and looked at —
+  only build/test/format were checked. This session added a throwaway xUnit
+  test (`_PreviewRenderTemp.cs`, deleted before finishing — not committed)
+  that calls `BoardRenderer.Render` directly with hand-built seed-shaped
+  data and saves the result as a PNG, so the real rendering pipeline could
+  be eyeballed against `docs/mockup-v4.png` without needing the device.
+  Worth recreating the same way for future UI sessions rather than trusting
+  green tests alone — this caught two real bugs green tests missed:
+- **Bug: Shopping panel on the Today dashboard was a dead end.** It drew
+  "SHOPPING — N ITEMS" but never listed the items or gave them a tap
+  target, unlike the mockup's checkbox list. Root cause: `TodayScreenData`
+  only carried `ShoppingOpenCount` (an int), not the items themselves.
+  Fixed by changing that field to `ShoppingItems`
+  (`IReadOnlyList<ShoppingItem>`) and adding `TodayScreen.DrawShoppingRow`
+  (checkbox + strikethrough + `ToggleShoppingItem` hit region), mirroring
+  the existing `DrawTodoRow` pattern. `BoardRenderer.BuildTodayData` now
+  passes `Active(state.ShoppingItems)` straight through instead of
+  precomputing a count.
+- **Bug (pre-existing, not introduced this session): `BitmapFont` had no
+  glyphs for `[` or `]`.** Unsupported characters silently render as a
+  space (by design, for graceful degradation), so every checkbox (`[X]`/
+  `[ ]`) and every panel's `[ TAP TO OPEN ]` hint text across the whole
+  app — not just the new Today dashboard — has been rendering without its
+  brackets since Session 8 introduced checkboxes. Only became obvious once
+  the mockup rework made checkboxes visually central. Added 5x7 glyphs for
+  both characters to `Glyphs`, matching the existing `(`/`)` style.
+- Re-ran the preview-render test after both fixes and compared side by
+  side with the mockup for both modes: header, strip, panel borders,
+  checkbox rows, and footer all now match structurally. **This is still
+  only a same-resolution PNG rendered on the dev machine — not a real
+  device screenshot.** E-ink's actual grayscale/ghosting behavior, and
+  whether the 5x7 font is legible at arm's length on the real 1404x1872
+  panel, are still unverified — that's part of Checkpoint 4.1, unchanged
+  from Session 9's note.
+- Verified locally: `dotnet build`, `dotnet test --filter
+  "Category!=Integration"` (48 pass before deleting the temp test, 47
+  after), `dotnet format --verify-no-changes` all green. Nothing
+  committed — left staged for Dan to review.
+
+### 2026-07-12 — Session 11 (Stage 4, font swap + list sizing + reminders filter)
+
+- Dan reported the list styling from Session 10's checkbox rework "still
+  not right" and asked for four things: 1.5x bigger list rows, a real
+  font (Source Sans 3) across the whole solution replacing the
+  hand-authored 5x7 bitmap font, a divider line above/below every list
+  row, and Reminders on the Today dashboard filtered by mode (Work
+  reminders only in Work Ops, Personal only in Life Ops — previously it
+  showed both unconditionally, unlike everything else on the board which
+  is mode-scoped).
+- **Font:** replaced `BitmapFont` (deleted, along with its test) with a
+  new `AppFont` wrapping `SixLabors.Fonts`/`SixLabors.ImageSharp.Drawing`
+  (added as a package reference — compatible with the existing
+  ImageSharp 3.1.12, no major-version bump needed). Embedded Source Sans 3
+  v3.052R (SIL OFL 1.1, official Adobe release) as two `EmbeddedResource`
+  TTFs (`Assets/Fonts/SourceSans3-{Regular,Bold}.ttf` + `OFL.txt`) so
+  device deploys stay self-contained — no system font dependency. `AppFont`
+  keeps the old call shape (`DrawText`, `MeasureWidth`, plus a new
+  `LineHeight` standing in for the old `GlyphHeight * scale`) to keep the
+  migration mechanical across all 11 call sites (Header, Footer,
+  NowNextStrip, HelloWorldScreen, every screen, BoardRenderer's inline
+  fallback text).
+- **1.5x rows + dividers:** scoped this to the screens that are actually
+  checkbox/tap-target list rows — Todos, Shopping, Agenda, and the
+  Today dashboard's Todo/Shopping panel rows. Meals and Recipe screens got
+  the font swap but not the 1.5x/divider treatment (they're not
+  checkbox-style list rows and weren't part of Session 10's changes
+  either) — flag if Dan wants those screens to match too.
+  `Canvas.DrawDivider` added as a thin `FillRect` helper. Row heights
+  went 60-84px → 90-126px depending on screen; checkbox/text gap and hit
+  region padding scaled with them so tap targets stay accurate.
+- **Reminders mode filter:** `TodayScreenData` still carries both
+  `WorkReminders`/`PersonalReminders` unfiltered (BoardRenderer's job is
+  building the data, not filtering for display); `TodayScreen.Render` now
+  picks whichever list matches `data.Mode` before handing it to the
+  existing `DrawTodoPanel`. Updated the stale doc comments in both files
+  that used to say Reminders was intentionally cross-context like
+  NowNextStrip's Now/Next — it isn't anymore.
+- Repeated Session 10's throwaway render-to-PNG visual QA pattern
+  (`_PreviewRenderTemp.cs`, deleted before finishing, never committed):
+  rendered Today/Todos/Shopping for both modes. Caught one bug: the
+  panel-header right-side label ("3 ITEMS", "1 OPEN", "1 LEFT") was still
+  sized at the new 32px row font and visually collided with the title's
+  divider rule once rows got bigger — fixed by giving panel titles/labels
+  their own `PanelLabelFont` (22px) independent of row size.
+  `SaveAsPng` needed `using SixLabors.ImageSharp;`, not
+  `SixLabors.ImageSharp.Formats.Png` — the extension method lives in the
+  root namespace.
+- Verified locally: `dotnet build` (0 warnings/errors), `dotnet test
+  --filter "Category!=Integration"` (all 43 pass — 3 Domain + 5 Api + 18
+  Rendering + 17 Device), `dotnet format --verify-no-changes` clean.
+  Nothing committed — left staged for Dan to review, per standing
+  instruction never to commit on his behalf.
+
+### 2026-07-12 — Session 12 (Stage 4, tap-responsiveness perf pass)
+
+- Dan captured real-device debug logs (the `[debug] Render breakdown` /
+  `Timing:` lines already wired up in `Program.cs`/`RenderDiagnostics`)
+  after tapping a reminders-panel checkbox and asked for ideas to cut the
+  tap-to-refresh latency, which ran 560-965ms `total-app`.
+- **Root-caused two bottlenecks from the logs, not guesswork:**
+  `fillRect`/`Composite` calls were already near-free (79-106 calls in
+  under 2ms), which pointed straight at the other two breakdown numbers:
+  - **Text rendering (~45-90ms per `DrawText` call, the dominant cost).**
+    `AppFont.DrawText` had no glyph cache — every call re-ran SixLabors'
+    outline-to-raster fill + antialiasing from scratch, even for
+    characters/fonts repeated across nearly every render.
+  - **Framebuffer blit (105-455ms, climbing across taps rather than
+    settling).** `WriteImageRgb565`/`WriteImageGray8` called
+    `Marshal.WriteInt16`/`WriteByte` once per pixel — ~2.6M P/Invoke-style
+    calls for a full 1404x1872 frame.
+  - (`db/apply` spiking to 536ms was a one-time cold SQLite open, not a
+    per-tap cost — left alone.)
+- **Fix 1 — glyph cache in `AppFont`:** each unique `(font, char)` is now
+  rasterized once (via the same SixLabors `DrawText` path as before, onto
+  a scratch canvas) into a cropped ink-coverage mask, cached, and reused
+  via a cheap per-pixel coverage blend on every subsequent draw instead of
+  re-rasterizing. Per-character advance widths come from
+  `TextMeasurer.MeasureAdvance` on each character in isolation — there's
+  no cross-glyph kerning in the cached path (see Decisions).
+- **Fix 2 — blit via row buffers + a lookup table in
+  `FramebufferDevice`:** `WriteImageRgb565`/`WriteImageGray8` now build
+  each row into a reused managed `byte[]` and `Marshal.Copy` the whole row
+  in one call (~1872 calls instead of ~2.6M), and the gray→RGB565
+  conversion is a precomputed 256-entry table instead of per-pixel
+  shifts.
+- **Fix 3 — panel chrome cache in `TodayScreen`, at Dan's request:** the
+  panel frame/title/rule/"[ TAP TO OPEN ]" hint never changes when only a
+  row's checked state does, so it's now cached separately (`ChromeCache`,
+  keyed by title/hasHint/size) from the existing row-content
+  `PanelCache`. A single-row toggle composites the cached chrome instead
+  of re-drawing the title text.
+- Verified: `dotnet build`, `dotnet test`, and
+  `dotnet format --verify-no-changes` all green. Dan re-captured the same
+  device debug logs after the fix: `total-app` dropped from 560-965ms to
+  **227ms**; `text` dropped from 45-90ms/call to **~3.8ms/call**; `blit`
+  dropped from the 250-455ms range to **~132ms** — now the largest single
+  remaining line item.
+- **Open for next session:** blit (~132ms) is still the biggest cost.
+  Worth investigating whether the mmap'd fb0 write needs an explicit
+  `msync`/cache-flush that's adding overhead, or whether the
+  `RefreshRegion` ioctl call can be batched/overlapped with the write —
+  not yet investigated. Nothing committed — left staged for Dan to review.
+
 ## Decisions
 
 - **Repo name:** using `remarkable-fullview` (already existed with origin
@@ -547,6 +692,14 @@ close Stage 4. Session 9 reworked the UI to match `docs/mockup-v4.png`
   since `BoardRenderer` only ever draws black/white. The original
   `Refresh(fullRefresh: true)` path (GC16, full panel) is unchanged for
   the initial boot render.
+- **Stage 4 — `AppFont`'s glyph cache lays out cached glyphs using each
+  character's own advance width, with no cross-glyph kerning.** Accepted
+  the small spacing inaccuracy (a handful of specific letter pairs may sit
+  a pixel or two off from SixLabors' fully-kerned layout) in exchange for
+  turning the per-`DrawText`-call cost from tens of ms of outline
+  rasterization into a cache lookup + blit — the actual bottleneck on the
+  rM1's CPU. Revisit only if a specific rendered pair looks visibly wrong
+  on device.
 
 ## Known issues / blockers
 
@@ -629,3 +782,16 @@ close Stage 4. Session 9 reworked the UI to match `docs/mockup-v4.png`
   the touch+button dual-thread evdev read loop behaves correctly on
   device. If the button doesn't switch mode, see the `evtest`
   troubleshooting note in `docs/device-setup.md`.
+- **Session 10 did a visual QA pass on Session 9's rework** (render-to-PNG
+  comparison against the mockup — see Session 10 log) and fixed two bugs
+  that green tests hadn't caught: the Today dashboard's Shopping panel
+  wasn't listing/toggling items, and `BitmapFont` was silently dropping
+  `[`/`]` from every checkbox and "[ TAP TO OPEN ]" hint app-wide. **Next
+  session: continue UI polish this same way** — recreate the throwaway
+  render-to-PNG test (see Session 10 log for the pattern), compare fresh
+  screenshots against `docs/mockup-v4.png` for every screen (not just
+  Today — Agenda/Meals/Shopping/Todos/Recipe full-screen views haven't had
+  this treatment yet), and look for other silently-dropped characters or
+  layout gaps the same way. Checkpoint 4.1 (real device) is still the
+  final gate before Stage 4 is closed, but doing another round or two of
+  dev-machine visual QA first will surface cheaper fixes before that trip.

@@ -11,9 +11,9 @@ namespace Fullview.Rendering.Screens;
 public static class RecipeScreen
 {
     private const int Margin = 24;
-    private const int HeaderScale = 4;
-    private const int SectionScale = 3;
-    private const int RowScale = 3;
+    private const int HeaderSize = 32;
+    private const int SectionSize = 22;
+    private const int RowSize = 22;
     private const int RowHeight = 50;
     private const int SectionGap = 20;
 
@@ -21,8 +21,9 @@ public static class RecipeScreen
     {
         var image = new Image<L8>(width, height, new L8(Canvas.White));
 
-        BitmapFont.DrawText(image, recipe.Title.ToUpperInvariant(), Margin, Margin, HeaderScale, Canvas.Black);
-        int y = Margin + BitmapFont.GlyphHeight * HeaderScale + Margin;
+        var headerFont = AppFont.Bold(HeaderSize);
+        AppFont.DrawText(image, recipe.Title.ToUpperInvariant(), Margin, Margin, headerFont, Canvas.Black);
+        int y = Margin + AppFont.LineHeight(headerFont) + Margin;
 
         y = DrawSection(image, "INGREDIENTS", recipe.Ingredients, y, height);
         y += SectionGap;
@@ -33,9 +34,11 @@ public static class RecipeScreen
 
     private static int DrawSection(Image<L8> image, string heading, IReadOnlyList<string> lines, int y, int height)
     {
-        BitmapFont.DrawText(image, heading, Margin, y, SectionScale, Canvas.Black);
-        y += BitmapFont.GlyphHeight * SectionScale + 10;
+        var sectionFont = AppFont.Bold(SectionSize);
+        AppFont.DrawText(image, heading, Margin, y, sectionFont, Canvas.Black);
+        y += AppFont.LineHeight(sectionFont) + 10;
 
+        var rowFont = AppFont.Regular(RowSize);
         foreach (var line in lines)
         {
             if (y > height - RowHeight)
@@ -43,7 +46,7 @@ public static class RecipeScreen
                 break;
             }
 
-            BitmapFont.DrawText(image, "- " + line, Margin, y, RowScale, Canvas.Black);
+            AppFont.DrawText(image, "- " + line, Margin, y, rowFont, Canvas.Black);
             y += RowHeight;
         }
 

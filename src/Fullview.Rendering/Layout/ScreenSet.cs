@@ -3,13 +3,14 @@ using Fullview.Domain;
 namespace Fullview.Rendering.Layout;
 
 /// <summary>
-/// Per-mode screen sets (B3): Personal = Today, Todos, Meals, Shopping; Work = Today,
-/// Todos, Agenda. Edge-tap navigation cycles through whichever list matches the current mode.
+/// Per-mode screen sets (B3): Personal = Today, Meals; Work = Today, Agenda. Edge-tap
+/// navigation cycles through whichever list matches the current mode. Todos and shopping
+/// items are reached via Today's panels rather than their own screens.
 /// </summary>
 public static class ScreenSet
 {
-    private static readonly List<ScreenKind> Personal = [ScreenKind.Today, ScreenKind.Todos, ScreenKind.Meals, ScreenKind.Shopping];
-    private static readonly List<ScreenKind> Work = [ScreenKind.Today, ScreenKind.Todos, ScreenKind.Agenda];
+    private static readonly List<ScreenKind> Personal = [ScreenKind.Today, ScreenKind.Meals];
+    private static readonly List<ScreenKind> Work = [ScreenKind.Today, ScreenKind.Agenda];
 
     public static IReadOnlyList<ScreenKind> NavigationOrder(SyncContext mode) =>
         mode == SyncContext.Work ? Work : Personal;

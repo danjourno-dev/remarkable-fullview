@@ -26,21 +26,40 @@ public static class NowNextStrip
     public const int Height = 140;
 
     private const int Margin = 20;
-    private const int TextScale = 3;
+    private const int TextSize = 24;
     private const byte Black = Canvas.Black;
 
-    /// <summary>Draws the strip onto rows [originY, originY + Height) of image.</summary>
-    public static void Draw(Image<L8> image, StripData data, int originY)
+    // StripData is already the fully-computed (Now, Next, TimeUntilNext) — most taps recompute
+    // the same values within the same minute, so cache on the computed data rather than the raw
+    // "Now" timestamp (which changes on every tap and would defeat the cache).
+    private static StripData? _cacheKey;
+    private static Image<L8>? _cache;
+
+    /// <summary>Renders the strip as its own <see cref="Height"/>-tall bitmap, reusing the
+    /// cached bitmap when <paramref name="data"/> is unchanged since the last render.</summary>
+    public static Image<L8> Render(int width, StripData data)
     {
-        Canvas.DrawFrame(image, 0, originY, image.Width, Height);
+        if (_cache is { } cached && cached.Width == width && _cacheKey == data)
+        {
+            return cached;
+        }
+
+        var image = new Image<L8>(width, Height, new L8(Canvas.White));
+        Canvas.DrawFrame(image, 0, 0, width, Height);
 
         int innerX = Margin + 14;
         string nowLine = "NOW  " + FormatEntry(data.Now, "—");
         string nextLine = "NEXT " + FormatEntry(data.Next, "—") + (data.TimeUntilNext is null ? "" : "  IN " + data.TimeUntilNext);
 
-        int lineOneY = originY + Margin + 8;
-        BitmapFont.DrawText(image, nowLine, innerX, lineOneY, TextScale, Black);
-        BitmapFont.DrawText(image, nextLine, innerX, lineOneY + BitmapFont.GlyphHeight * TextScale + 10, TextScale, Black);
+        var font = AppFont.Regular(TextSize);
+        int lineOneY = Margin + 8;
+        AppFont.DrawText(image, nowLine, innerX, lineOneY, font, Black);
+        AppFont.DrawText(image, nextLine, innerX, lineOneY + AppFont.LineHeight(font) + 10, font, Black);
+
+        _cache?.Dispose();
+        _cache = image;
+        _cacheKey = data;
+        return image;
     }
 
     private static string FormatEntry(StripEntry? entry, string emptyLabel) =>

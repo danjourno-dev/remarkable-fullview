@@ -4,12 +4,20 @@ public readonly record struct TouchTap(int X, int Y);
 
 /// <summary>
 /// Turns a raw evdev event stream into tap events: ABS_MT_TRACKING_ID assigned, then cleared
-/// (-1) again within
-/// <see cref="MaxDuration"/> and without moving more than <see cref="MaxMovement"/> touch
-/// units, is a tap at the last known ABS_MT_POSITION_X/Y. Anything longer or that moves
-/// further (a drag/scroll) is not a tap. Pure and clock-free (uses each event's own
-/// <see cref="RawInputEvent.Timestamp"/>) so it's testable from a canned event sequence
-/// without touching real hardware.
+/// (-1) again within <see cref="MaxDuration"/> and without moving more than
+/// <see cref="MaxMovement"/> touch units, is a tap at the last known ABS_MT_POSITION_X/Y.
+/// Anything longer or that moves further (a drag/scroll) is not a tap.
+///
+/// Touch-down/up state is only evaluated on SYN_REPORT, not eagerly on ABS_MT_TRACKING_ID.
+/// The rM1's cyttsp5_mt driver reports TRACKING_ID before POSITION_X/Y within a frame, so
+/// evaluating the transition eagerly would capture the *previous* touch's stale X/Y as this
+/// touch's down position — inflating the measured movement (often past
+/// <see cref="MaxMovement"/>, silently dropping the tap) or, on release, reporting the wrong
+/// coordinate entirely if X/Y hadn't yet been applied. Deferring to SYN_REPORT guarantees every
+/// EV_ABS update in the frame has already been applied first, regardless of intra-frame order.
+///
+/// Pure and clock-free (uses each event's own <see cref="RawInputEvent.Timestamp"/>) so it's
+/// testable from a canned event sequence without touching real hardware.
 /// </summary>
 public sealed class TouchTapDetector
 {
@@ -23,8 +31,10 @@ public sealed class TouchTapDetector
     private int _downX;
     private int _downY;
 
+    private bool? _pendingTrackingIdIsDown;
+
     /// <summary>Feeds one decoded event; returns the completed tap, if this event was the
-    /// touch-up that finished one.</summary>
+    /// SYN_REPORT closing the frame that finished one.</summary>
     public TouchTap? Feed(RawInputEvent evt)
     {
         switch (evt.Type)
@@ -38,11 +48,26 @@ public sealed class TouchTapDetector
                 return null;
 
             case EvCodes.EV_ABS when evt.Code == EvCodes.ABS_MT_TRACKING_ID:
-                return evt.Value >= 0 ? OnTouchDown(evt.Timestamp) : OnTouchUp(evt.Timestamp);
+                _pendingTrackingIdIsDown = evt.Value >= 0;
+                return null;
+
+            case EvCodes.EV_SYN when evt.Code == EvCodes.SYN_REPORT:
+                return FlushFrame(evt.Timestamp);
 
             default:
                 return null;
         }
+    }
+
+    private TouchTap? FlushFrame(TimeSpan timestamp)
+    {
+        if (_pendingTrackingIdIsDown is not { } isDown)
+        {
+            return null;
+        }
+
+        _pendingTrackingIdIsDown = null;
+        return isDown ? OnTouchDown(timestamp) : OnTouchUp(timestamp);
     }
 
     private TouchTap? OnTouchDown(TimeSpan timestamp)

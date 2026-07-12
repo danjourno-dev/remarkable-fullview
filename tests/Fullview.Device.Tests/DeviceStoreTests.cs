@@ -202,6 +202,17 @@ public class DeviceStoreTests : IDisposable
     }
 
     [Fact]
+    public void ApplyRemoteSnapshot_LocalRowAbsentFromResponse_IsDeleted()
+    {
+        _store.SaveSeed(MakeTodo("seed1", "Seed todo"));
+
+        _store.ApplyRemoteSnapshot(new[] { MakeTodo("t1", "From server") });
+
+        var todo = Assert.Single(_store.Query<Todo>());
+        Assert.Equal("t1", todo.Id);
+    }
+
+    [Fact]
     public void ApplyRemoteSnapshot_DoesNotQueueAnOutboxRow()
     {
         _store.ApplyRemoteSnapshot(new[] { MakeTodo("t1", "From server") });

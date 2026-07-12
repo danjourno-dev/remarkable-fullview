@@ -134,10 +134,19 @@ public sealed class DeviceStore
     /// rule as the server: a pulled row only overwrites the local copy if it's strictly
     /// newer. Bypasses the outbox — these are remote writes, not local mutations to push
     /// back out. Returns whether anything actually changed, since a full list is returned
-    /// on every sync regardless of whether the caller has anything new to show.</summary>
+    /// on every sync regardless of whether the caller has anything new to show.
+    ///
+    /// The response is the server's complete account-wide list (EntitiesFunction's GET,
+    /// including tombstones), so it's authoritative: any local row absent from it isn't
+    /// something the server forgot to mention, it's something the server has never heard of.
+    /// That's exactly true of <see cref="SeedData"/>'s bootstrap rows, which are written via
+    /// <see cref="SaveSeed"/> and deliberately never pushed through the outbox — so a real
+    /// sync response prunes them here rather than leaving them to linger forever alongside
+    /// genuine data.</summary>
     public bool ApplyRemoteSnapshot(IReadOnlyList<SyncEntity> entities)
     {
         var changed = false;
+        var incoming = entities.Select(e => (e.EntityType, e.Id)).ToHashSet();
 
         using var transaction = _database.Connection.BeginTransaction();
         foreach (var entity in entities)
@@ -152,8 +161,41 @@ public sealed class DeviceStore
             UpsertEntityRow(transaction, entity, json);
         }
 
+        changed |= DeleteRowsNotIn(transaction, incoming);
+
         transaction.Commit();
         return changed;
+    }
+
+    private bool DeleteRowsNotIn(SqliteTransaction transaction, HashSet<(string EntityType, string Id)> keep)
+    {
+        var toDelete = new List<(string EntityType, string Id)>();
+        using (var command = _database.Connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = "SELECT entity_type, id FROM entities;";
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                var row = (reader.GetString(0), reader.GetString(1));
+                if (!keep.Contains(row))
+                {
+                    toDelete.Add(row);
+                }
+            }
+        }
+
+        foreach (var (entityType, id) in toDelete)
+        {
+            using var command = _database.Connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = "DELETE FROM entities WHERE entity_type = $type AND id = $id;";
+            command.Parameters.AddWithValue("$type", entityType);
+            command.Parameters.AddWithValue("$id", id);
+            command.ExecuteNonQuery();
+        }
+
+        return toDelete.Count > 0;
     }
 
     private DateTimeOffset? GetExistingUpdatedAt(SqliteTransaction transaction, SyncEntity entity)

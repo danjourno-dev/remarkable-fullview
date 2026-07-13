@@ -48,17 +48,20 @@ public class SyncEntityJsonTests
         Assert.Equal($"ShoppingItem#{entity.Id}", entity.SortKey);
     }
 
-    /// <summary>System.Text.Json's polymorphic reader only recognizes the type discriminator
-    /// (`entityType`) when it's the first property in the JSON object — a hand-built payload
-    /// (e.g. the web app's `newEntity.ts`) where it lands later fails deserialization by
-    /// falling back to the abstract base type, which has no constructor. Guards against that
-    /// regressing silently, since nothing else in the type system catches it.</summary>
+    /// <summary>JSON objects have no defined property order, so any client (the web app's
+    /// object literals, the device's serializer, a future one) may legitimately put
+    /// `entityType` anywhere in the payload. <see cref="SyncEntityJsonConverter"/> buffers
+    /// the object and reads the discriminator wherever it lands instead of relying on
+    /// System.Text.Json's built-in polymorphic reader, which only recognizes it when it's
+    /// first.</summary>
     [Fact]
-    public void Deserialization_requires_the_discriminator_to_be_the_first_property()
+    public void Deserialization_does_not_depend_on_discriminator_position()
     {
         var reordered = """{"id":"x","context":0,"updatedAt":"2026-07-13T09:00:00Z","updatedBy":"web","deleted":false,"title":"Reordered","priority":1,"entityType":"Todo"}""";
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
 
-        Assert.Throws<NotSupportedException>(() => JsonSerializer.Deserialize<SyncEntity>(reordered));
+        var entity = Assert.IsType<Todo>(JsonSerializer.Deserialize<SyncEntity>(reordered, options));
+        Assert.Equal("Reordered", entity.Title);
     }
 
     [Fact]

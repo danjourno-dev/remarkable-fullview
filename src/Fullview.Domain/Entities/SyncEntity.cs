@@ -8,15 +8,7 @@ namespace Fullview.Domain.Entities;
 /// the last-write-wins clock and the delta-query cursor value; <see cref="Deleted"/> is a
 /// tombstone, not a hard delete, so peers can converge on deletions too.
 /// </summary>
-[JsonPolymorphic(TypeDiscriminatorPropertyName = "entityType")]
-[JsonDerivedType(typeof(Todo), "Todo")]
-[JsonDerivedType(typeof(AgendaEvent), "AgendaEvent")]
-[JsonDerivedType(typeof(Meal), "Meal")]
-[JsonDerivedType(typeof(ShoppingItem), "ShoppingItem")]
-[JsonDerivedType(typeof(Recipe), "Recipe")]
-[JsonDerivedType(typeof(Routine), "Routine")]
-[JsonDerivedType(typeof(RoutineCheck), "RoutineCheck")]
-[JsonDerivedType(typeof(InboxPage), "InboxPage")]
+[JsonConverter(typeof(SyncEntityJsonConverter))]
 public abstract class SyncEntity
 {
     /// <summary>ULID minted by whichever client created the entity.</summary>

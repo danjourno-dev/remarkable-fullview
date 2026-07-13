@@ -2,6 +2,13 @@ namespace Fullview.Device.Input;
 
 public readonly record struct TouchTap(int X, int Y);
 
+/// <summary>A released touch that moved further than <see cref="TouchTapDetector"/>'s tap
+/// threshold — the vertical component of a finger-drag (e.g. scrolling the Agenda screen).
+/// Raw touch-native Y units, same axis TouchTapDetector reads off ABS_MT_POSITION_Y; the
+/// caller (Program.cs's RunTouchLoop) applies the same axis-inversion/rescale it already
+/// uses for taps before turning this into a row count.</summary>
+public readonly record struct TouchDrag(int DeltaY);
+
 /// <summary>
 /// Turns a raw evdev event stream into tap events: ABS_MT_TRACKING_ID assigned, then cleared
 /// (-1) again within <see cref="MaxDuration"/> and without moving more than
@@ -32,6 +39,17 @@ public sealed class TouchTapDetector
     private int _downY;
 
     private bool? _pendingTrackingIdIsDown;
+    private TouchDrag? _pendingDrag;
+
+    /// <summary>Consumes and clears any drag produced by the most recent <see cref="Feed"/>
+    /// call. Separate from Feed's return value (rather than a tuple) so Feed's existing
+    /// tap-only contract, and the tests pinned to it, don't change.</summary>
+    public TouchDrag? TakeDrag()
+    {
+        var drag = _pendingDrag;
+        _pendingDrag = null;
+        return drag;
+    }
 
     /// <summary>Feeds one decoded event; returns the completed tap, if this event was the
     /// SYN_REPORT closing the frame that finished one.</summary>
@@ -90,6 +108,16 @@ public sealed class TouchTapDetector
         var duration = timestamp - _downAt;
         int movement = Math.Max(Math.Abs(_x - _downX), Math.Abs(_y - _downY));
 
-        return duration <= MaxDuration && movement <= MaxMovement ? new TouchTap(_x, _y) : null;
+        if (duration <= MaxDuration && movement <= MaxMovement)
+        {
+            return new TouchTap(_x, _y);
+        }
+
+        if (movement > MaxMovement)
+        {
+            _pendingDrag = new TouchDrag(_y - _downY);
+        }
+
+        return null;
     }
 }

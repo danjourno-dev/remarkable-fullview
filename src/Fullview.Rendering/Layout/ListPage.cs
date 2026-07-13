@@ -24,4 +24,8 @@ public static class ListPage
 
         return (visible, items.Count - visible.Count);
     }
+
+    /// <summary>The furthest an offset-based scrolling view (e.g. Agenda's drag-to-scroll)
+    /// can be pushed while still keeping the last page full of content.</summary>
+    public static int MaxScrollOffset(int itemCount) => Math.Max(0, itemCount - MaxVisibleItems);
 }

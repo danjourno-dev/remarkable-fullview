@@ -146,4 +146,57 @@ public class TouchTapDetectorTests
         Assert.Equal(new TouchTap(100, 200), firstTap);
         Assert.Equal(new TouchTap(900, 1600), secondTap);
     }
+
+    [Fact]
+    public void MovedTooFarBeforeLifting_ExposesTheVerticalDistanceAsADrag()
+    {
+        var detector = new TouchTapDetector();
+
+        detector.Feed(TrackingId(0, 0.00));
+        detector.Feed(Abs(EvCodes.ABS_MT_POSITION_X, 100, 0.00));
+        detector.Feed(Abs(EvCodes.ABS_MT_POSITION_Y, 200, 0.00));
+        detector.Feed(Syn(0.00));
+
+        detector.Feed(Abs(EvCodes.ABS_MT_POSITION_Y, 350, 0.05));
+        detector.Feed(Syn(0.05));
+
+        detector.Feed(TrackingId(-1, 0.10));
+        var tap = detector.Feed(Syn(0.10));
+
+        Assert.Null(tap);
+        Assert.Equal(new TouchDrag(150), detector.TakeDrag());
+    }
+
+    [Fact]
+    public void TakeDrag_ClearsAfterBeingRead_SoItIsNotReportedTwice()
+    {
+        var detector = new TouchTapDetector();
+
+        detector.Feed(TrackingId(0, 0.00));
+        detector.Feed(Abs(EvCodes.ABS_MT_POSITION_X, 100, 0.00));
+        detector.Feed(Abs(EvCodes.ABS_MT_POSITION_Y, 200, 0.00));
+        detector.Feed(Syn(0.00));
+        detector.Feed(Abs(EvCodes.ABS_MT_POSITION_Y, 350, 0.05));
+        detector.Feed(Syn(0.05));
+        detector.Feed(TrackingId(-1, 0.10));
+        detector.Feed(Syn(0.10));
+
+        Assert.NotNull(detector.TakeDrag());
+        Assert.Null(detector.TakeDrag());
+    }
+
+    [Fact]
+    public void QuickTap_ProducesNoDrag()
+    {
+        var detector = new TouchTapDetector();
+
+        detector.Feed(TrackingId(0, 0.00));
+        detector.Feed(Abs(EvCodes.ABS_MT_POSITION_X, 100, 0.00));
+        detector.Feed(Abs(EvCodes.ABS_MT_POSITION_Y, 200, 0.00));
+        detector.Feed(Syn(0.00));
+        detector.Feed(TrackingId(-1, 0.10));
+        detector.Feed(Syn(0.10));
+
+        Assert.Null(detector.TakeDrag());
+    }
 }

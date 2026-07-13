@@ -39,7 +39,7 @@ public static class TodayScreen
     private const int TitleSize = 22;
     private const int RowSize = 32;
     private const int HintSize = 16;
-    private const int RowHeight = 90;
+    public const int RowHeight = 90;
     private const byte Black = Canvas.Black;
 
     private static readonly Font TitleFont = AppFont.Bold(TitleSize);
@@ -59,7 +59,25 @@ public static class TodayScreen
     // separately from PanelCache (which is keyed by row content) and reused across renders.
     private static readonly Dictionary<string, (int Width, int Height, Image<L8> Image)> ChromeCache = new();
 
-    public static ScreenRenderResult Render(int width, int height, TodayScreenData data)
+    /// <summary>Converts a raw framebuffer-pixel drag delta into a row count for the mini
+    /// Agenda panel, whose row height differs from the full-screen Agenda's.</summary>
+    public static int RowsForDrag(int fbDeltaY) => (int)Math.Round(-fbDeltaY / (double)RowHeight);
+
+    /// <summary>How many agenda rows fit in the mini panel's content area, given the panel's
+    /// pixel height. Used both to window the visible rows and to clamp the scroll offset.</summary>
+    public static int AgendaCapacity(int panelHeight)
+    {
+        int contentTop = PanelPad + AppFont.LineHeight(TitleFont) + 10 + 16;
+        int contentBottom = panelHeight - PanelPad - AppFont.LineHeight(HintFont) - 10;
+        return Math.Max(1, (contentBottom - contentTop) / RowHeight + 1);
+    }
+
+    /// <summary>The mini Agenda panel's pixel height for a given full screen height, mirroring
+    /// the grid math in Render. Lets callers outside this class (e.g. the drag-scroll clamp in
+    /// Program.cs's Apply) compute AgendaCapacity without duplicating the grid layout.</summary>
+    public static int AgendaPanelHeight(int screenHeight) => (screenHeight - 2 * Margin - PanelGap) / 2;
+
+    public static ScreenRenderResult Render(int width, int height, TodayScreenData data, int agendaScrollOffset = 0)
     {
         var image = new Image<L8>(width, height, new L8(Canvas.White));
         var regions = new List<HitRegion>();
@@ -72,7 +90,7 @@ public static class TodayScreen
         var bottomLeft = new Rectangle(Margin, Margin + rowHeight + PanelGap, colWidth, rowHeight);
         var bottomRight = new Rectangle(Margin + colWidth + PanelGap, Margin + rowHeight + PanelGap, colWidth, rowHeight);
 
-        DrawAgendaPanel(image, regions, topLeft, data.TodayAgenda);
+        DrawAgendaPanel(image, regions, topLeft, data.TodayAgenda, agendaScrollOffset);
 
         if (data.Mode == SyncContext.Work)
         {
@@ -112,18 +130,22 @@ public static class TodayScreen
         Canvas.Composite(image, cached.Image, rect.X, rect.Y);
     }
 
-    private static void DrawAgendaPanel(Image<L8> image, List<HitRegion> regions, Rectangle rect, IReadOnlyList<AgendaEvent> agenda)
+    private static void DrawAgendaPanel(Image<L8> image, List<HitRegion> regions, Rectangle rect, IReadOnlyList<AgendaEvent> agenda, int scrollOffset)
     {
         var lines = agenda
             .OrderBy(e => e.Start)
             .Select(e => $"{(e.IsAllDay ? "ALL DAY" : e.Start.ToLocal().ToString("HH:mm"))} {e.Title}")
             .ToList();
 
-        string contentKey = string.Join(";", lines);
+        int capacity = AgendaCapacity(rect.Height);
+        int offset = Math.Clamp(scrollOffset, 0, Math.Max(0, lines.Count - capacity));
+        var visible = lines.Skip(offset).Take(capacity).ToList();
+
+        string contentKey = $"{offset}|" + string.Join(";", visible);
         RenderPanel(image, "agenda", contentKey, rect, panel =>
         {
             DrawPanelFrame(panel, rect.Width, rect.Height, "AGENDA", null, hasHint: true, out int contentTop, out int contentBottom);
-            DrawLines(panel, contentTop, contentBottom, lines);
+            DrawLines(panel, contentTop, contentBottom, visible);
         });
 
         AddOpenScreenHint(regions, rect, ScreenKind.Agenda);

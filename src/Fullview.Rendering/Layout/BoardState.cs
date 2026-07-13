@@ -18,11 +18,15 @@ public sealed record BoardState(
     IReadOnlyList<InboxPage> InboxPages,
     DateTimeOffset Now,
     DateTimeOffset? LastSyncedAt = null,
-    int PendingSyncCount = 0)
+    int PendingSyncCount = 0,
+    int AgendaScrollOffset = 0,
+    int TodayAgendaScrollOffset = 0)
 {
-    public BoardState WithMode(SyncContext mode) => this with { Mode = mode, CurrentScreen = ScreenSet.NavigationOrder(mode)[0] };
+    public BoardState WithMode(SyncContext mode) =>
+        this with { Mode = mode, CurrentScreen = ScreenSet.NavigationOrder(mode)[0], AgendaScrollOffset = 0, TodayAgendaScrollOffset = 0 };
 
-    public BoardState WithScreen(ScreenKind screen) => this with { CurrentScreen = screen, OpenRecipeId = null };
+    public BoardState WithScreen(ScreenKind screen) =>
+        this with { CurrentScreen = screen, OpenRecipeId = null, AgendaScrollOffset = 0, TodayAgendaScrollOffset = 0 };
 
     public BoardState WithOpenRecipe(string recipeId) => this with { CurrentScreen = ScreenKind.Recipe, OpenRecipeId = recipeId };
 }

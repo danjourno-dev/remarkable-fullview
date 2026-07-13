@@ -15,6 +15,12 @@ public static class BoardRenderer
 {
     public const int EdgeNavWidth = 90;
 
+    /// <summary>The count AgendaScreen actually renders (mode-filtered, today-only) — used
+    /// by Program.cs's ScrollAgenda handling to clamp BoardState.AgendaScrollOffset against
+    /// the same set the screen pages through, not the full unfiltered AgendaEvents list.</summary>
+    public static int AgendaEntryCount(BoardState state) =>
+        TodayAgenda(state, DateOnly.FromDateTime(state.Now.ToLocal().DateTime)).Count;
+
     public static ScreenRenderResult Render(int width, int height, BoardState state, string version = "dev")
     {
         var image = new Image<L8>(width, height, new L8(Canvas.White));
@@ -58,8 +64,8 @@ public static class BoardRenderer
 
         return state.CurrentScreen switch
         {
-            ScreenKind.Today => TodayScreen.Render(width, height, BuildTodayData(state, today)),
-            ScreenKind.Agenda => AgendaScreen.Render(width, height, TodayAgenda(state, today), state.Now),
+            ScreenKind.Today => TodayScreen.Render(width, height, BuildTodayData(state, today), state.TodayAgendaScrollOffset),
+            ScreenKind.Agenda => AgendaScreen.Render(width, height, TodayAgenda(state, today), state.Now, state.AgendaScrollOffset),
             ScreenKind.Meals => MealsScreen.Render(width, height, Active(state.Meals), RecipesById(state)),
             ScreenKind.Recipe => RenderRecipe(width, height, state),
             _ => throw new ArgumentOutOfRangeException(nameof(state), state.CurrentScreen, "Unknown screen kind.")

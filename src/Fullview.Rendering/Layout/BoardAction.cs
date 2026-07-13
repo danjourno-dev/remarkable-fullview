@@ -32,4 +32,14 @@ public abstract record BoardAction
     /// <see cref="SyncNow"/> so Program.cs can skip a full render/e-ink refresh when nothing
     /// changed, instead of always giving user-facing feedback.</summary>
     public sealed record BackgroundSync : BoardAction;
+
+    /// <summary>A vertical finger-drag on a scrollable agenda list (full-screen Agenda, or the
+    /// Today dashboard's mini Agenda panel), replacing the old "+N more" truncation with a
+    /// scrollable window. Carries the raw framebuffer-pixel delta rather than a row count
+    /// because the row height differs per screen; Apply() converts pixels to rows using
+    /// whichever screen is current. Not tied to a hit region (a drag can start/end anywhere on
+    /// the panel), so Program.cs's main loop synthesizes this action directly from a
+    /// DeviceInputKind.Drag input rather than a hit-region lookup. A no-op on any screen other
+    /// than Agenda or Today.</summary>
+    public sealed record ScrollAgenda(int PixelDeltaY) : BoardAction;
 }

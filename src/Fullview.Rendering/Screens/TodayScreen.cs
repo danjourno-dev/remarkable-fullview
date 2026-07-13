@@ -116,7 +116,7 @@ public static class TodayScreen
     {
         var lines = agenda
             .OrderBy(e => e.Start)
-            .Select(e => $"{(e.IsAllDay ? "ALL DAY" : e.Start.ToLocalTime().ToString("HH:mm"))} {e.Title}")
+            .Select(e => $"{(e.IsAllDay ? "ALL DAY" : e.Start.ToLocal().ToString("HH:mm"))} {e.Title}")
             .ToList();
 
         string contentKey = string.Join(";", lines);

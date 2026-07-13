@@ -30,7 +30,9 @@ public class GoogleEventMapperTests
         Assert.True(mapped.ReadOnly);
         Assert.Equal(SyncContext.Work, mapped.Context);
         Assert.Equal("evt-1", mapped.ExternalId);
-        Assert.Equal(GoogleEventMapper.BuildEntityId("work-cal", "evt-1"), mapped.Id);
+        Assert.Equal(
+            GoogleEventMapper.BuildEntityId("work-cal", "Standup", DateTimeOffset.Parse("2026-07-12T09:00:00+01:00"), DateTimeOffset.Parse("2026-07-12T09:15:00+01:00")),
+            mapped.Id);
     }
 
     [Fact]
@@ -53,40 +55,56 @@ public class GoogleEventMapperTests
     }
 
     [Fact]
-    public void Map_CancelledEvent_ReturnsTombstone()
+    public void Map_CancelledEvent_WithKnownEntityId_ReturnsTombstoneForThatId()
+    {
+        var googleEvent = new Event { Id = "evt-3", Status = "cancelled" };
+
+        var mapped = GoogleEventMapper.Map(googleEvent, "work-cal", SyncContext.Work, Now, knownEntityId: "google-work-cal-standup-123-456");
+
+        Assert.NotNull(mapped);
+        Assert.True(mapped!.Deleted);
+        Assert.Equal("google-work-cal-standup-123-456", mapped.Id);
+    }
+
+    [Fact]
+    public void Map_CancelledEvent_WithoutKnownEntityId_ReturnsNull()
     {
         var googleEvent = new Event { Id = "evt-3", Status = "cancelled" };
 
         var mapped = GoogleEventMapper.Map(googleEvent, "work-cal", SyncContext.Work, Now);
 
-        Assert.NotNull(mapped);
-        Assert.True(mapped!.Deleted);
-        Assert.Equal(GoogleEventMapper.BuildEntityId("work-cal", "evt-3"), mapped.Id);
+        Assert.Null(mapped);
     }
 
     [Fact]
-    public void Map_SameGoogleEvent_AlwaysProducesSameEntityId()
+    public void BuildEntityId_SameContent_AlwaysProducesSameEntityId()
     {
-        var first = GoogleEventMapper.BuildEntityId("cal-a", "evt-x");
-        var second = GoogleEventMapper.BuildEntityId("cal-a", "evt-x");
+        var start = DateTimeOffset.Parse("2026-07-13T09:00:00+01:00");
+        var end = DateTimeOffset.Parse("2026-07-13T09:15:00+01:00");
+
+        var first = GoogleEventMapper.BuildEntityId("cal-a", "Stand-up", start, end);
+        var second = GoogleEventMapper.BuildEntityId("cal-a", "Stand-up", start, end);
 
         Assert.Equal(first, second);
     }
 
     [Fact]
-    public void Map_DifferentCalendars_ProduceDifferentEntityIds()
+    public void BuildEntityId_DifferentCalendars_ProduceDifferentEntityIds()
     {
-        var forWork = GoogleEventMapper.BuildEntityId("work-cal", "evt-x");
-        var forPersonal = GoogleEventMapper.BuildEntityId("personal-cal", "evt-x");
+        var start = DateTimeOffset.Parse("2026-07-13T09:00:00+01:00");
+        var end = DateTimeOffset.Parse("2026-07-13T09:15:00+01:00");
+
+        var forWork = GoogleEventMapper.BuildEntityId("work-cal", "Stand-up", start, end);
+        var forPersonal = GoogleEventMapper.BuildEntityId("personal-cal", "Stand-up", start, end);
 
         Assert.NotEqual(forWork, forPersonal);
     }
 
     [Fact]
-    public void Map_SameICalUidDifferentGoogleId_ProducesSameEntityId()
+    public void Map_SameContentDifferentGoogleId_ProducesSameEntityId()
     {
-        // Simulates the Work mirror's wipe-and-rebuild: Outlook keeps the iCalUID stable
-        // but Google mints a new internal id on every recreate.
+        // Simulates the Work mirror's wipe-and-rebuild: title/start/end survive, but both
+        // Google's id and Outlook's iCalUID churn on every recreate.
         var beforeRebuild = new Event
         {
             Id = "abc123",
@@ -98,7 +116,7 @@ public class GoogleEventMapperTests
         var afterRebuild = new Event
         {
             Id = "xyz789",
-            ICalUID = "outlook-uid-1@outlook.com",
+            ICalUID = "outlook-uid-2@outlook.com",
             Summary = "Stand-up",
             Start = new EventDateTime { DateTimeDateTimeOffset = DateTimeOffset.Parse("2026-07-13T09:00:00+01:00") },
             End = new EventDateTime { DateTimeDateTimeOffset = DateTimeOffset.Parse("2026-07-13T09:15:00+01:00") }
@@ -108,5 +126,16 @@ public class GoogleEventMapperTests
         var mappedAfter = GoogleEventMapper.Map(afterRebuild, "work-cal", SyncContext.Work, Now);
 
         Assert.Equal(mappedBefore!.Id, mappedAfter!.Id);
+    }
+
+    [Fact]
+    public void BuildEntityId_TitleWithSpecialCharacters_ProducesSafeSortKeyComponent()
+    {
+        var start = DateTimeOffset.Parse("2026-07-13T09:00:00+01:00");
+        var end = DateTimeOffset.Parse("2026-07-13T09:15:00+01:00");
+
+        var id = GoogleEventMapper.BuildEntityId("work-cal", "1:1 w/ Dan (#urgent!) — re: Q3 / budget", start, end);
+
+        Assert.Matches("^[a-z0-9-]+$", id);
     }
 }

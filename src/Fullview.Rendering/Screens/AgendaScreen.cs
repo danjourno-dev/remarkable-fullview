@@ -1,3 +1,4 @@
+using Fullview.Domain;
 using Fullview.Domain.Entities;
 using Fullview.Rendering.Layout;
 using SixLabors.ImageSharp;
@@ -40,7 +41,7 @@ public static class AgendaScreen
 
         foreach (var ev in visible)
         {
-            string time = ev.IsAllDay ? "ALL DAY" : ev.Start.ToLocalTime().ToString("HH:mm");
+            string time = ev.IsAllDay ? "ALL DAY" : ev.Start.ToLocal().ToString("HH:mm");
             string marker = ev.Source == AgendaEventSource.GoogleCalendar ? "*" : "";
             string line = $"{time} {ev.Title}{marker}";
             byte color = !ev.IsAllDay && ev.End <= now ? PastEventColor : Canvas.Black;

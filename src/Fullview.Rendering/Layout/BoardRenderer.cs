@@ -20,7 +20,7 @@ public static class BoardRenderer
         var image = new Image<L8>(width, height, new L8(Canvas.White));
         var regions = new List<HitRegion>();
 
-        var today = DateOnly.FromDateTime(state.Now.LocalDateTime);
+        var today = DateOnly.FromDateTime(state.Now.ToLocal().DateTime);
         string inboxStatus = InboxStatus(state);
 
         var header = Header.Render(width, state.Mode, today, inboxStatus);
@@ -81,7 +81,7 @@ public static class BoardRenderer
 
     private static IReadOnlyList<AgendaEvent> TodayAgenda(BoardState state, DateOnly today) =>
         FilterByContext(state.AgendaEvents, state.Mode)
-            .Where(e => DateOnly.FromDateTime(e.Start.LocalDateTime) == today)
+            .Where(e => DateOnly.FromDateTime(e.Start.ToLocal().DateTime) == today)
             .ToList();
 
     private static TodayScreenData BuildTodayData(BoardState state, DateOnly today)
@@ -131,7 +131,7 @@ public static class BoardRenderer
     private static string SyncStatus(BoardState state)
     {
         string pending = state.PendingSyncCount == 0 ? "" : $" · {state.PendingSyncCount} PENDING";
-        return state.LastSyncedAt is { } at ? $"SYNCED {at.ToLocalTime():HH:mm}{pending}" : $"NOT SYNCED{pending}";
+        return state.LastSyncedAt is { } at ? $"SYNCED {at.ToLocal():HH:mm}{pending}" : $"NOT SYNCED{pending}";
     }
 
     private static IReadOnlyList<T> FilterByContext<T>(IReadOnlyList<T> entities, SyncContext mode) where T : SyncEntity =>

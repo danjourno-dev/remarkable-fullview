@@ -38,7 +38,8 @@ public sealed class CalendarPullFunction
 
         var syncStore = new DynamoSyncStore(new AmazonDynamoDBClient(), TableName);
         var stateStore = new CalendarSyncStateStore(new AmazonDynamoDBClient(), TableName);
-        var service = new GoogleCalendarPullService(syncStore, stateStore, credentials, refreshToken, context);
+        var indexStore = new CalendarEventIndexStore(new AmazonDynamoDBClient(), TableName);
+        var service = new GoogleCalendarPullService(syncStore, stateStore, indexStore, credentials, refreshToken, context);
 
         await service.PullAllAsync(calendars, CancellationToken.None);
     }

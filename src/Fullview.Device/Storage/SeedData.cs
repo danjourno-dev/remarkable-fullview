@@ -20,7 +20,7 @@ public static class SeedData
         }
 
         var now = DateTimeOffset.UtcNow;
-        var today = DateOnly.FromDateTime(now.LocalDateTime);
+        var today = DateOnly.FromDateTime(now.ToLocal().DateTime);
 
         foreach (var todo in Todos(now))
         {
@@ -68,7 +68,7 @@ public static class SeedData
             UpdatedBy = SeedDevice,
             Title = "Renew car insurance",
             Priority = TodoPriority.Normal,
-            DueDate = DateOnly.FromDateTime(now.LocalDateTime).AddDays(3)
+            DueDate = DateOnly.FromDateTime(now.ToLocal().DateTime).AddDays(3)
         },
         new()
         {

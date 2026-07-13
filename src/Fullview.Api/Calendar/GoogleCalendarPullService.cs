@@ -21,18 +21,21 @@ public sealed class GoogleCalendarPullService
 
     private readonly ISyncStore _syncStore;
     private readonly CalendarSyncStateStore _stateStore;
+    private readonly CalendarEventIndexStore _indexStore;
     private readonly CalendarService _calendarService;
     private readonly ILambdaContext? _context;
 
     public GoogleCalendarPullService(
         ISyncStore syncStore,
         CalendarSyncStateStore stateStore,
+        CalendarEventIndexStore indexStore,
         GoogleOAuthCredentials credentials,
         string refreshToken,
         ILambdaContext? context = null)
     {
         _syncStore = syncStore;
         _stateStore = stateStore;
+        _indexStore = indexStore;
         _context = context;
 
         var flow = new GoogleAuthorizationCodeFlow(new GoogleAuthorizationCodeFlow.Initializer
@@ -89,10 +92,29 @@ public sealed class GoogleCalendarPullService
         {
             foreach (var googleEvent in page.Items ?? Enumerable.Empty<Google.Apis.Calendar.v3.Data.Event>())
             {
+                if (googleEvent.Status == "cancelled")
+                {
+                    var knownEntityId = googleEvent.Id is null
+                        ? null
+                        : await _indexStore.GetEntityIdAsync(calendar.Id, googleEvent.Id, ct);
+                    var tombstone = GoogleEventMapper.Map(googleEvent, calendar.Id, calendar.Context, now, knownEntityId);
+                    if (tombstone is not null)
+                    {
+                        await _syncStore.PutAsync(tombstone, ct);
+                        await _indexStore.DeleteAsync(calendar.Id, googleEvent.Id!, ct);
+                    }
+
+                    continue;
+                }
+
                 var mapped = GoogleEventMapper.Map(googleEvent, calendar.Id, calendar.Context, now);
                 if (mapped is not null)
                 {
                     await _syncStore.PutAsync(mapped, ct);
+                    if (googleEvent.Id is not null)
+                    {
+                        await _indexStore.SaveAsync(calendar.Id, googleEvent.Id, mapped.Id, ct);
+                    }
                 }
             }
 

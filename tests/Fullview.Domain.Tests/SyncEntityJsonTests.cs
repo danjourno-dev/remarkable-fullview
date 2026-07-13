@@ -48,6 +48,19 @@ public class SyncEntityJsonTests
         Assert.Equal($"ShoppingItem#{entity.Id}", entity.SortKey);
     }
 
+    /// <summary>System.Text.Json's polymorphic reader only recognizes the type discriminator
+    /// (`entityType`) when it's the first property in the JSON object — a hand-built payload
+    /// (e.g. the web app's `newEntity.ts`) where it lands later fails deserialization by
+    /// falling back to the abstract base type, which has no constructor. Guards against that
+    /// regressing silently, since nothing else in the type system catches it.</summary>
+    [Fact]
+    public void Deserialization_requires_the_discriminator_to_be_the_first_property()
+    {
+        var reordered = """{"id":"x","context":0,"updatedAt":"2026-07-13T09:00:00Z","updatedBy":"web","deleted":false,"title":"Reordered","priority":1,"entityType":"Todo"}""";
+
+        Assert.Throws<NotSupportedException>(() => JsonSerializer.Deserialize<SyncEntity>(reordered));
+    }
+
     [Fact]
     public void AgendaEvent_readonly_pulled_flag_round_trips()
     {

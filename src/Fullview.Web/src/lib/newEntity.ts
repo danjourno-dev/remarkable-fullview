@@ -26,8 +26,8 @@ export function newTodo(
   overrides: Partial<Pick<Todo, "priority" | "dueDate" | "energy">> = {},
 ): Todo {
   return {
-    ...base(),
     entityType: "Todo",
+    ...base(),
     context,
     title,
     priority: overrides.priority ?? TodoPriority.Normal,
@@ -43,8 +43,8 @@ export function newShoppingItem(
   category: string | null = null,
 ): ShoppingItem {
   return {
-    ...base(),
     entityType: "ShoppingItem",
+    ...base(),
     context,
     name,
     category,
@@ -58,8 +58,8 @@ export function newMeal(
   overrides: Partial<Pick<Meal, "recipeId" | "description">> = {},
 ): Meal {
   return {
-    ...base(),
     entityType: "Meal",
+    ...base(),
     context: SyncContext.Personal,
     date,
     slot,
@@ -70,8 +70,8 @@ export function newMeal(
 
 export function newRecipe(title: string): Recipe {
   return {
-    ...base(),
     entityType: "Recipe",
+    ...base(),
     context: SyncContext.Personal,
     title,
     ingredients: [],

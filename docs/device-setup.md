@@ -116,6 +116,7 @@ The app reads these optional environment variables at startup:
 | `FULLVIEW_API_BASE_URL` | unset | base URL of the deployed `/entities` API (e.g. `https://<id>.execute-api.<region>.amazonaws.com`); sync is disabled entirely if unset |
 | `FULLVIEW_API_KEY` | unset | the shared API key checked by API Gateway's authorizer (see "API authentication" below); every `/entities` call is rejected with 401 if unset or wrong, which the app treats like any other sync failure |
 | `FULLVIEW_MODE` | `app` | `app` (default, foreground UI) or `sync-once` (headless outbox drain, see below) |
+| `FULLVIEW_TIMEZONE` | `Europe/London` | IANA timezone id used for "today"/`HH:mm` rendering. The rM1's OS clock is NTP-synced but has no local timezone configured (`/etc/localtime` points at Universal), so the app can't rely on the OS to know wall-clock time — set this if you're outside the UK |
 | `ENABLE_LOGGING` | unset (off) | `1` or `true` turns on extra diagnostic logging (env var resolution at startup, sync engine internals, background-sync trigger firings); see "Diagnostic logging" below |
 
 The touch default was confirmed on hardware via `cat /proc/bus/input/devices`:

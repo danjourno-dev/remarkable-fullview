@@ -16,11 +16,22 @@ public static class AgendaScreen
     private const int Margin = 24;
     private const int HeaderSize = 32;
     private const int RowSize = 33;
-    private const int RowHeight = 105;
+
+    /// <summary>Public so device input code can convert a drag's pixel distance into a
+    /// number of rows to scroll (see Program.cs's RunTouchLoop and QtfbInputSource).</summary>
+    public const int RowHeight = 105;
 
     private const byte PastEventColor = 160;
 
-    public static ScreenRenderResult Render(int width, int height, IReadOnlyList<AgendaEvent> events, DateTimeOffset now)
+    /// <summary>Converts a vertical drag distance (framebuffer pixels, positive = finger
+    /// moved down the screen) into a row count for BoardAction.ScrollAgenda. Dragging up
+    /// (negative fbDeltaY) should reveal later entries, hence the sign flip. Shared by both
+    /// device input paths (Program.cs's RunTouchLoop for evdev, QtfbInputSource for AppLoad)
+    /// so a swipe feels the same regardless of how the app was launched.</summary>
+    public static int RowsForDrag(int fbDeltaY) => (int)Math.Round(-fbDeltaY / (double)RowHeight);
+
+    public static ScreenRenderResult Render(
+        int width, int height, IReadOnlyList<AgendaEvent> events, DateTimeOffset now, int scrollOffset = 0)
     {
         var image = new Image<L8>(width, height, new L8(Canvas.White));
 
@@ -29,7 +40,12 @@ public static class AgendaScreen
 
         int y = Margin + AppFont.LineHeight(headerFont) + Margin;
         var ordered = events.OrderBy(e => e.IsAllDay ? 0 : 1).ThenBy(e => e.Start).ToList();
-        var (visible, overflow) = ListPage.Paginate(ordered);
+
+        // No more "+N more" truncation (B2's old rule) — the caller-supplied offset pages
+        // through the full list instead, driven by a finger-drag on the device or the
+        // clamped scroll state Program.cs keeps in BoardState.AgendaScrollOffset.
+        int offset = Math.Clamp(scrollOffset, 0, ListPage.MaxScrollOffset(ordered.Count));
+        var visible = ordered.Skip(offset).Take(ListPage.MaxVisibleItems).ToList();
 
         var rowFont = AppFont.Regular(RowSize);
         int rowWidth = width - 2 * Margin;
@@ -49,11 +65,6 @@ public static class AgendaScreen
             AppFont.DrawText(image, line, Margin, y, rowFont, color);
             y += RowHeight;
             Canvas.DrawDivider(image, Margin, y - 8, rowWidth);
-        }
-
-        if (overflow > 0)
-        {
-            AppFont.DrawText(image, $"+{overflow} MORE", Margin, y, rowFont, Canvas.Black);
         }
 
         return new ScreenRenderResult(image, Array.Empty<HitRegion>());

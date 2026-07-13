@@ -1,5 +1,6 @@
 using Fullview.Domain;
 using Fullview.Domain.Entities;
+using Fullview.Rendering.Layout;
 using Fullview.Rendering.Screens;
 
 namespace Fullview.Rendering.Tests;
@@ -89,5 +90,49 @@ public class AgendaScreenTests
         }
 
         Assert.Equal(0, darkest);
+    }
+
+    [Fact]
+    public void Render_MoreThanAPageOfEvents_ShowsOnePageAndScrollingReachesTheRest()
+    {
+        var now = new DateTimeOffset(2026, 7, 9, 0, 0, 0, TimeSpan.Zero);
+        var events = Enumerable.Range(0, 10)
+            .Select(i => Event($"Event {i}", now.AddHours(i), now.AddHours(i + 1)))
+            .ToArray();
+
+        var firstPage = AgendaScreen.Render(1404, 1872, events, now);
+        Assert.True(RowHasContent(firstPage, 6), "Expected all 7 rows of the first page to render.");
+        Assert.False(RowHasContent(firstPage, 7), "Expected no leftover '+N more' row.");
+
+        int maxOffset = ListPage.MaxScrollOffset(events.Length);
+        Assert.Equal(3, maxOffset);
+
+        var lastPage = AgendaScreen.Render(1404, 1872, events, now, maxOffset);
+        Assert.True(RowHasContent(lastPage, 6), "Expected the 10th event to be reachable by scrolling.");
+        Assert.False(RowHasContent(lastPage, 7));
+
+        // Scrolling further than the max offset clamps instead of going blank.
+        var overscrolled = AgendaScreen.Render(1404, 1872, events, now, scrollOffset: 1000);
+        Assert.True(RowHasContent(overscrolled, 6));
+    }
+
+    private static bool RowHasContent(ScreenRenderResult result, int rowIndex)
+    {
+        const int margin = 24;
+        const int rowHeight = 105;
+        int y = margin + 32 + margin + rowIndex * rowHeight;
+
+        for (int py = y; py < y + rowHeight - 10; py++)
+        {
+            for (int px = margin; px < 1404 - margin; px++)
+            {
+                if (result.Image[px, py].PackedValue < 255)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 }

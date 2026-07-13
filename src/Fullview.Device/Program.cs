@@ -12,6 +12,7 @@ using Fullview.Domain;
 using Fullview.Domain.Entities;
 using Fullview.Rendering;
 using Fullview.Rendering.Layout;
+using Fullview.Rendering.Screens;
 using SixLabors.ImageSharp;
 
 string deviceId = Environment.GetEnvironmentVariable("FULLVIEW_DEVICE_ID") ?? "device";
@@ -215,6 +216,12 @@ foreach (var input in inputs.GetConsumingEnumerable(cts.Token))
     {
         action = new BoardAction.BackgroundSync();
     }
+    else if (input.Kind == DeviceInputKind.Drag)
+    {
+        // Not a hit-region lookup — a drag can start/end anywhere on the panel, so the row
+        // delta (stashed in Y by RunTouchLoop/QtfbInputSource) goes straight to the action.
+        action = new BoardAction.ScrollAgenda(input.Y);
+    }
     else
     {
         Console.WriteLine($"[debug] Tap mapped to fb ({input.X}, {input.Y}) — fb is {fb.Width}x{fb.Height}.");
@@ -234,7 +241,7 @@ foreach (var input in inputs.GetConsumingEnumerable(cts.Token))
 
     var swApply = Stopwatch.StartNew();
     var stateBeforeApply = state;
-    state = Apply(action, state, store, settings, deviceId, syncEngine);
+    state = Apply(action, state, store, settings, deviceId, syncEngine, fb.Width, fb.Height);
     swApply.Stop();
 
     // BoardAction.BackgroundSync's Apply case returns the same state reference (no `with`)
@@ -424,6 +431,21 @@ static void RunTouchLoop(
             Console.WriteLine($"[debug] Raw touch ({t.X}, {t.Y}) of {TouchMaxX}x{TouchMaxY} -> fb ({fbX}, {fbY}).");
             inputs.Add(new DeviceInput(DeviceInputKind.Tap, fbX, fbY));
         }
+
+        if (detector.TakeDrag() is { } drag)
+        {
+            // Both touch axes are inverted (see the 180-degree-mounting comment above), so a
+            // raw DeltaY increase corresponds to a *decrease* in fb-space Y, same as the
+            // per-axis rescale taps go through. The pixel delta (not a row count) is passed
+            // through — Apply() knows which screen is current and converts to rows using that
+            // screen's row height.
+            int fbDeltaY = -drag.DeltaY * fbHeight / TouchMaxY;
+            Console.WriteLine($"[debug] Raw drag deltaY={drag.DeltaY} -> fb deltaY={fbDeltaY}.");
+            if (fbDeltaY != 0)
+            {
+                inputs.Add(new DeviceInput(DeviceInputKind.Drag, 0, fbDeltaY));
+            }
+        }
     }
 }
 
@@ -451,7 +473,7 @@ static void RunButtonLoop(EvdevDevice button, BlockingCollection<DeviceInput> in
 
 static BoardState Apply(
     BoardAction action, BoardState state, DeviceStore store, DeviceSettings settings,
-    string deviceId, SyncEngine? syncEngine)
+    string deviceId, SyncEngine? syncEngine, int fbWidth, int fbHeight)
 {
     switch (action)
     {
@@ -481,6 +503,35 @@ static BoardState Apply(
 
         case BoardAction.OpenRecipe(var recipeId):
             return state.WithOpenRecipe(recipeId) with { Now = DateTimeOffset.Now };
+
+        // Ignored off the Agenda screen — a drag can't currently target any other screen,
+        // but this keeps Apply total if that ever changes. Matches BackgroundSync's "same
+        // reference = nothing to redraw" convention below when the offset doesn't move
+        // (e.g. dragging further at either end of the list).
+        case BoardAction.ScrollAgenda(var pixelDeltaY):
+            if (state.CurrentScreen == ScreenKind.Agenda)
+            {
+                int rowDelta = AgendaScreen.RowsForDrag(pixelDeltaY);
+                int maxOffset = ListPage.MaxScrollOffset(BoardRenderer.AgendaEntryCount(state));
+                int newOffset = Math.Clamp(state.AgendaScrollOffset + rowDelta, 0, maxOffset);
+                return newOffset == state.AgendaScrollOffset
+                    ? state
+                    : state with { AgendaScrollOffset = newOffset, Now = DateTimeOffset.Now };
+            }
+
+            if (state.CurrentScreen == ScreenKind.Today)
+            {
+                int rowDelta = TodayScreen.RowsForDrag(pixelDeltaY);
+                int panelHeight = TodayScreen.AgendaPanelHeight(fbHeight);
+                int capacity = TodayScreen.AgendaCapacity(panelHeight);
+                int maxTodayOffset = Math.Max(0, BoardRenderer.AgendaEntryCount(state) - capacity);
+                int newTodayOffset = Math.Clamp(state.TodayAgendaScrollOffset + rowDelta, 0, maxTodayOffset);
+                return newTodayOffset == state.TodayAgendaScrollOffset
+                    ? state
+                    : state with { TodayAgendaScrollOffset = newTodayOffset, Now = DateTimeOffset.Now };
+            }
+
+            return state;
 
         case BoardAction.SyncNow:
             if (syncEngine is null)
@@ -539,7 +590,8 @@ internal enum DeviceInputKind
 {
     Tap,
     HardwareButton,
-    SyncTick
+    SyncTick,
+    Drag
 }
 
 internal readonly record struct DeviceInput(DeviceInputKind Kind, int X, int Y);

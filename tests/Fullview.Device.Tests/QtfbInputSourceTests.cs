@@ -29,6 +29,43 @@ public class QtfbInputSourceTests
     }
 
     [Fact]
+    public void SmallMovementWithinThreshold_StillProducesATap()
+    {
+        var script = new Queue<QtfbUserInput>(new[]
+        {
+            new QtfbUserInput(Qtfb.INPUT_TOUCH_PRESS, DevId: 0, X: 100, Y: 200, D: 50),
+            new QtfbUserInput(Qtfb.INPUT_TOUCH_RELEASE, DevId: 0, X: 100, Y: 230, D: 0),
+        });
+        var inputs = new BlockingCollection<DeviceInput>();
+
+        RunUntilExhausted(script, inputs);
+
+        var tap = Assert.Single(inputs);
+        Assert.Equal(DeviceInputKind.Tap, tap.Kind);
+    }
+
+    [Fact]
+    public void VerticalDragPastThreshold_ProducesARawPixelDeltaInsteadOfATap()
+    {
+        var script = new Queue<QtfbUserInput>(new[]
+        {
+            new QtfbUserInput(Qtfb.INPUT_TOUCH_PRESS, DevId: 0, X: 100, Y: 200, D: 50),
+            // qtfb coordinates already arrive in fb-pixel space, so the raw 210px delta is
+            // passed straight through — Program.cs's Apply() converts pixels to rows using
+            // whichever screen is current (AgendaScreen or TodayScreen have different row
+            // heights), not this input source.
+            new QtfbUserInput(Qtfb.INPUT_TOUCH_RELEASE, DevId: 0, X: 100, Y: 410, D: 0),
+        });
+        var inputs = new BlockingCollection<DeviceInput>();
+
+        RunUntilExhausted(script, inputs);
+
+        var drag = Assert.Single(inputs);
+        Assert.Equal(DeviceInputKind.Drag, drag.Kind);
+        Assert.Equal(210, drag.Y);
+    }
+
+    [Fact]
     public void PenPressAlone_ProducesNoInput()
     {
         var script = new Queue<QtfbUserInput>(new[]

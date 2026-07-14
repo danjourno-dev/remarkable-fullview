@@ -39,25 +39,7 @@ public static class GoogleEventMapper
     {
         if (googleEvent.Status == "cancelled")
         {
-            if (knownEntityId is null)
-            {
-                return null;
-            }
-
-            return new AgendaEvent
-            {
-                Id = knownEntityId,
-                Context = context,
-                UpdatedAt = now,
-                UpdatedBy = "google-calendar-pull",
-                Deleted = true,
-                Title = string.Empty,
-                Start = now,
-                End = now,
-                Source = AgendaEventSource.GoogleCalendar,
-                ExternalId = googleEvent.Id,
-                ReadOnly = true
-            };
+            return knownEntityId is null ? null : Tombstone(knownEntityId, googleEvent.Id, context, now);
         }
 
         var (start, end, isAllDay) = ResolveTimes(googleEvent);
@@ -84,6 +66,25 @@ public static class GoogleEventMapper
             ReadOnly = true
         };
     }
+
+    /// <summary>Builds a tombstone row for <paramref name="entityId"/> — used both for an
+    /// explicit Google cancellation and for the old time slot of a moved event (same Google
+    /// event id, new content-derived id, no cancellation notice sent).</summary>
+    public static AgendaEvent Tombstone(string entityId, string? googleEventId, SyncContext context, DateTimeOffset now) =>
+        new()
+        {
+            Id = entityId,
+            Context = context,
+            UpdatedAt = now,
+            UpdatedBy = "google-calendar-pull",
+            Deleted = true,
+            Title = string.Empty,
+            Start = now,
+            End = now,
+            Source = AgendaEventSource.GoogleCalendar,
+            ExternalId = googleEventId,
+            ReadOnly = true
+        };
 
     // All-day events carry Date (no time component) instead of DateTime — the two shapes
     // are mutually exclusive on Google's EventDateTime.

@@ -4,6 +4,7 @@ using System.Net.NetworkInformation;
 using System.Reflection;
 using System.Security.Cryptography.X509Certificates;
 using Fullview.Device;
+using Fullview.Device.Capture;
 using Fullview.Device.Input;
 using Fullview.Device.Logging;
 using Fullview.Device.Storage;
@@ -19,6 +20,12 @@ string deviceId = Environment.GetEnvironmentVariable("FULLVIEW_DEVICE_ID") ?? "d
 string? apiBaseUrl = Environment.GetEnvironmentVariable("FULLVIEW_API_BASE_URL");
 string? apiKey = Environment.GetEnvironmentVariable("FULLVIEW_API_KEY");
 string runMode = Environment.GetEnvironmentVariable("FULLVIEW_MODE") ?? "app";
+// Stage 7: the Inbox notebook's own directory under xochitl's storage (see
+// docs/device-setup.md's "Inbox capture" section), e.g.
+// ~/.local/share/remarkable/xochitl/<notebookUuid> — containing that notebook's
+// <pageUuid>.rm files directly. Unset disables capture scanning entirely (same "absent
+// config = feature off" convention as FULLVIEW_API_BASE_URL for sync).
+string? inboxNotebookPath = Environment.GetEnvironmentVariable("FULLVIEW_INBOX_NOTEBOOK_PATH");
 
 string dbPath = Environment.GetEnvironmentVariable("FULLVIEW_DB_PATH")
     ?? Path.Combine(AppContext.BaseDirectory, "fullview.db");
@@ -45,8 +52,20 @@ DeviceLog.Debug(
 using var database = DeviceDatabase.Open(dbPath);
 var store = new DeviceStore(database);
 var settings = new DeviceSettings(database);
+var captureStore = new CaptureStore(database);
 
 SeedData.ApplyIfEmpty(store);
+
+// Cheap, local, no network — scan for changed Inbox pages before deciding whether either
+// mode below actually has anything worth a network round-trip.
+if (inboxNotebookPath is not null)
+{
+    int queued = InboxWatcher.ScanAndEnqueue(inboxNotebookPath, captureStore);
+    if (queued > 0)
+    {
+        Console.WriteLine($"[capture] Queued {queued} changed Inbox page(s) for upload.");
+    }
+}
 
 // Headless mode for the systemd RTC-wake timer (tools/device/systemd/fullview-sync.timer):
 // no fb0/qtfb/evdev is touched here, so it can never contend with the AppLoad-launched
@@ -54,7 +73,7 @@ SeedData.ApplyIfEmpty(store);
 // queued to push, to avoid waking the radio every 30 minutes for no reason.
 if (string.Equals(runMode, "sync-once", StringComparison.OrdinalIgnoreCase))
 {
-    if (store.OutboxCount() == 0)
+    if (store.OutboxCount() == 0 && captureStore.OutboxCount() == 0)
     {
         Console.WriteLine("[sync] sync-once: outbox empty, nothing to push, skipping.");
         Environment.Exit(0);
@@ -69,6 +88,13 @@ if (string.Equals(runMode, "sync-once", StringComparison.OrdinalIgnoreCase))
     using var syncOnceHandler = CreateHttpHandler();
     using var syncOnceHttp = new HttpClient(syncOnceHandler) { BaseAddress = new Uri(apiBaseUrl!), Timeout = TimeSpan.FromSeconds(20) };
     AddApiKeyHeader(syncOnceHttp, apiKey);
+
+    // Uploads any queued page bytes and queues their InboxPage entities into the normal
+    // entity outbox first, so the SyncEngine drain immediately below pushes them in the
+    // same run rather than waiting for a second sync-once wake.
+    var syncOnceCaptureEngine = new CaptureUploadEngine(captureStore, store, new CaptureClient(syncOnceHttp), deviceId);
+    syncOnceCaptureEngine.DrainAsync(CancellationToken.None).GetAwaiter().GetResult();
+
     var syncOnceEngine = new SyncEngine(store, settings, new SyncClient(syncOnceHttp));
     var syncOnceResult = syncOnceEngine.SyncOnceAsync(CancellationToken.None).GetAwaiter().GetResult();
     Console.WriteLine($"[sync] sync-once: {syncOnceResult.Outcome}.");
@@ -80,10 +106,14 @@ if (string.Equals(runMode, "sync-once", StringComparison.OrdinalIgnoreCase))
 // startup for long — a failed attempt just leaves the local cache as-is (B2: stale is fine,
 // never hidden) and the footer will read "NOT SYNCED" or the last-known time.
 SyncEngine? syncEngine = null;
+CaptureUploadEngine? captureEngine = null;
 if (apiBaseUrl is not null)
 {
     var syncHttp = new HttpClient(CreateHttpHandler()) { BaseAddress = new Uri(apiBaseUrl), Timeout = TimeSpan.FromSeconds(8) };
     AddApiKeyHeader(syncHttp, apiKey);
+    captureEngine = new CaptureUploadEngine(captureStore, store, new CaptureClient(syncHttp), deviceId);
+    captureEngine.DrainAsync(CancellationToken.None).GetAwaiter().GetResult();
+
     syncEngine = new SyncEngine(store, settings, new SyncClient(syncHttp));
     var startupResult = syncEngine.SyncOnceAsync(CancellationToken.None).GetAwaiter().GetResult();
     Console.WriteLine($"[sync] Startup sync: {startupResult.Outcome}.");
@@ -241,7 +271,7 @@ foreach (var input in inputs.GetConsumingEnumerable(cts.Token))
 
     var swApply = Stopwatch.StartNew();
     var stateBeforeApply = state;
-    state = Apply(action, state, store, settings, deviceId, syncEngine, fb.Width, fb.Height);
+    state = Apply(action, state, store, settings, deviceId, syncEngine, captureEngine, captureStore, inboxNotebookPath, fb.Width, fb.Height);
     swApply.Stop();
 
     // BoardAction.BackgroundSync's Apply case returns the same state reference (no `with`)
@@ -387,6 +417,21 @@ static void TryImmediateSync(SyncEngine? syncEngine)
     Console.WriteLine($"[sync] Post-toggle sync: {result.Outcome}.");
 }
 
+// Re-scans the Inbox notebook for pages changed since app open (e.g. a page written earlier
+// in this same session) and drains any queued uploads, immediately before every full sync
+// cycle — same fire-now-fail-silent contract as the rest of this file: a failed upload just
+// leaves the capture outbox for the next trigger to retry.
+static void ScanAndDrainCapture(string? inboxNotebookPath, CaptureStore captureStore, CaptureUploadEngine? captureEngine)
+{
+    if (inboxNotebookPath is null || captureEngine is null)
+    {
+        return;
+    }
+
+    InboxWatcher.ScanAndEnqueue(inboxNotebookPath, captureStore);
+    captureEngine.DrainAsync(CancellationToken.None).GetAwaiter().GetResult();
+}
+
 static void LogRegions(ScreenRenderResult render)
 {
     Console.WriteLine($"[debug] {render.Regions.Count} hit region(s):");
@@ -473,7 +518,8 @@ static void RunButtonLoop(EvdevDevice button, BlockingCollection<DeviceInput> in
 
 static BoardState Apply(
     BoardAction action, BoardState state, DeviceStore store, DeviceSettings settings,
-    string deviceId, SyncEngine? syncEngine, int fbWidth, int fbHeight)
+    string deviceId, SyncEngine? syncEngine, CaptureUploadEngine? captureEngine, CaptureStore captureStore,
+    string? inboxNotebookPath, int fbWidth, int fbHeight)
 {
     switch (action)
     {
@@ -540,6 +586,7 @@ static BoardState Apply(
                 return state with { Now = DateTimeOffset.Now };
             }
 
+            ScanAndDrainCapture(inboxNotebookPath, captureStore, captureEngine);
             var manualResult = syncEngine.SyncOnceAsync(CancellationToken.None).GetAwaiter().GetResult();
             Console.WriteLine($"[sync] Manual sync: {manualResult.Outcome}.");
             return state with
@@ -563,6 +610,7 @@ static BoardState Apply(
                 return state;
             }
 
+            ScanAndDrainCapture(inboxNotebookPath, captureStore, captureEngine);
             var bgResult = syncEngine.SyncOnceAsync(CancellationToken.None).GetAwaiter().GetResult();
             DeviceLog.Debug($"[sync] Background sync: {bgResult.Outcome}, changed={bgResult.Changed}.");
             if (bgResult.Outcome == SyncOutcome.Failed || !bgResult.Changed)

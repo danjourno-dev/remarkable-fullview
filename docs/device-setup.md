@@ -116,6 +116,7 @@ The app reads these optional environment variables at startup:
 | `FULLVIEW_API_BASE_URL` | unset | base URL of the deployed `/entities` API (e.g. `https://<id>.execute-api.<region>.amazonaws.com`); sync is disabled entirely if unset |
 | `FULLVIEW_API_KEY` | unset | the shared API key checked by API Gateway's authorizer (see "API authentication" below); every `/entities` call is rejected with 401 if unset or wrong, which the app treats like any other sync failure |
 | `FULLVIEW_MODE` | `app` | `app` (default, foreground UI) or `sync-once` (headless outbox drain, see below) |
+| `FULLVIEW_INBOX_NOTEBOOK_PATH` | unset | absolute path to the Inbox notebook's own directory under xochitl's storage, e.g. `/home/root/.local/share/remarkable/xochitl/<notebookUuid>` — find the uuid via that notebook's `.content`/`.metadata` file names in the parent `xochitl` directory. Contains the notebook's `<pageUuid>.rm` page files directly. Capture scanning/upload is disabled entirely if unset, same convention as `FULLVIEW_API_BASE_URL` for sync |
 | `FULLVIEW_TIMEZONE` | `Europe/London` | IANA timezone id used for "today"/`HH:mm` rendering. The rM1's OS clock is NTP-synced but has no local timezone configured (`/etc/localtime` points at Universal), so the app can't rely on the OS to know wall-clock time — set this if you're outside the UK |
 | `ENABLE_LOGGING` | unset (off) | `1` or `true` turns on extra diagnostic logging (env var resolution at startup, sync engine internals, background-sync trigger firings); see "Diagnostic logging" below |
 
@@ -171,6 +172,7 @@ never committed to the repo):
 FULLVIEW_API_BASE_URL=https://<your-api-id>.execute-api.<your-region>.amazonaws.com
 FULLVIEW_DEVICE_ID=<your-device-id>
 FULLVIEW_API_KEY=<your-api-key, see "API authentication" below>
+FULLVIEW_INBOX_NOTEBOOK_PATH=/home/root/.local/share/remarkable/xochitl/<your-inbox-notebook-uuid>
 ```
 
 `run.sh` (the AppLoad launch target) sources this same file before starting
@@ -230,6 +232,52 @@ ships to every visitor. Instead the web app prompts for the API key at
 runtime (a login screen backed by `AuthGate`) and stores it in the browser's
 `localStorage` after that. Give the key to whoever should have access; there
 is no separate password or account system (single user, Cognito is v2).
+
+## Inbox capture (Stage 7)
+
+Handwritten capture uses xochitl itself as the ink surface — remarkable-fullview
+does not draw, erase, or accept pen strokes of its own. AppLoad (the launcher
+this app runs under) keeps xochitl running underneath it, but its own source
+(read directly, not just its docs) exposes no programmatic way for a running
+external app to switch back to xochitl or to a specific notebook: no CLI, no
+socket, no D-Bus name, no signal. The only way out of a fullscreen AppLoad app
+is a manual gesture, and it's what the Today screen's header hint ("SWIPE FROM
+TOP TO WRITE") refers to:
+
+1. **Drag a finger from the top-center of the screen down to the center.**
+   This reveals AppLoad's window chrome for a few seconds.
+2. Tap the back arrow (top-left of that chrome) to return to xochitl.
+3. Write in your Inbox notebook, then repeat the same drag-down gesture from
+   xochitl's own top edge and pick "Fullview" from the AppLoad launcher grid
+   (long-press to reopen fullscreen) to come back to the board.
+
+**Set up your own Inbox notebook once, and use it for nothing else.** xochitl
+always reopens whatever document you last had open, and remarkable-fullview
+has no way to target a specific notebook — so if the Inbox notebook is the
+only thing you ever open in xochitl, step 2 above reliably lands you on it
+without any extra navigation. Create a notebook named "Inbox" (or anything you
+like) in xochitl before using this feature.
+
+Synthesizing the drag-down gesture from our own app via `uinput` was
+considered and rejected — see PROGRESS.md's Stage 7 amendment decision for
+why (it doesn't actually save a step, and may not even be visible to xochitl's
+input pipeline). The Today screen's INBOX status is informational only (no
+tap target); the gesture above is the only way to reach the notebook.
+
+**Upload.** Once `FULLVIEW_INBOX_NOTEBOOK_PATH` is set (see "Runtime
+configuration" above), every sync cycle (app open, the sync button, the
+background timer, and headless `sync-once` runs) first scans that directory
+for `.rm` page files whose content hash has changed since the last successful
+upload, and `PUT`s any changed page's raw bytes to `PUT /captures/{pageId}` —
+the device never gets S3 credentials of its own, only the same `x-api-key` it
+already holds for `/entities`. The Lambda behind that route (`CaptureFunction`)
+is the only thing with write access to the inbox bucket. A successful upload
+then creates an `InboxPage` entity (`State=Queued`, `S3Key` pointing at the
+uploaded object) through the normal `/entities` outbox, same as any other
+local mutation. The `.rm` stroke parse → PNG → Claude vision classification →
+entity filing pipeline that turns an uploaded page into real todos/shopping/
+agenda items is not built yet — this only gets the bytes safely off the
+device and onto S3.
 
 ## Google Calendar sync (Stage 6.5)
 

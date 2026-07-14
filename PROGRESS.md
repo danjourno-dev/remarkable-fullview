@@ -1231,3 +1231,168 @@ still needed to close Stage 5.
   device and web must both ship the new client build alongside the deploy).
 - Changes staged, not committed — Dan reviews and commits manually per
   standing instruction.
+
+### 2026-07-13 — Session 18 (Stage 7 amendment: capture surface investigation)
+
+- Dan issued a Stage 7 amendment overriding the plan text: no in-app ink
+  canvas (xochitl stays the pen surface — AppLoad keeps it running underneath
+  as a window switch, not a process restart), and the task was to investigate
+  whether AppLoad exposes a programmatic way to switch a running external app
+  to xochitl/a specific notebook, then report back before building anything
+  (blocking checkpoint).
+- **Investigated by reading AppLoad's actual source** (`asivery/rm-appload`,
+  supplied locally by Dan at `K:\Temp\rm-appload-master`), not docs/guesswork.
+  Confirmed: **no programmatic switch API exists at all.**
+  `AppLoadLauncher.launchApplication` (`src/Launcher.h`) is `Q_INVOKABLE` —
+  callable only from QML running inside AppLoad's own hooked-in UI tree, not
+  from an external app's backend process. The generic backend↔frontend socket
+  (`src/management.cpp`) only relays messages to that same app's own
+  registered frontend endpoints, never to the top-level `AppLoadCoordinator`.
+  The qtfb protocol our device app already speaks (`src/qtfb/common.h`) has a
+  fixed 7-message set (init/update/terminate/userinput/refresh-mode/
+  full-refresh) with nothing for switching apps. No CLI, D-Bus, FIFO, or
+  signal handler exists anywhere in the source (grepped the whole tree).
+  AppLoad isn't a separate process that can "launch xochitl" either — it's a
+  XOVI hook patched directly into xochitl's own QML resource tree
+  (`xovi/template/src/main.cpp`: `qmldiff_add_external_diff(..., "AppLoad
+  hooks in main UI")`), so "switching to xochitl" just means AppLoad's
+  overlay going inactive to reveal xochitl's already-running view underneath
+  — there's no notion of "open document X" from AppLoad's side. The only
+  documented/implemented way out of a fullscreen app is a physical gesture
+  (`resources/qml/window.qml`'s `swipeFromTheTop()`): drag from top-center
+  down to center, which reveals a topbar with Back/X for a few seconds — not
+  discoverable without being told (bare README instruction, nothing on
+  screen hints at it).
+- **Reported all three findings to Dan and stopped** per the amendment's
+  blocking instruction, then asked which fallback rung to build.
+- **Dan's decision: build rung 4 (informational only), explicitly rejecting
+  rung 3 (`uinput`-synthesized swipe gesture) — do not revisit.** Two
+  concrete reasons he gave: (1) the swipe only exits to AppLoad's own
+  chrome/launcher grid, not into xochitl directly — reaching the Inbox
+  notebook would need a *second* synthetic event (a tap on xochitl's entry
+  at coordinates hardcoded against AppLoad's launcher layout), which is
+  screen-scraping a third-party UI that breaks silently on any AppLoad
+  update; (2) a `uinput`-created virtual input device may never be visible to
+  xochitl's input pipeline at all, since Qt's evdev plugin enumerates devices
+  at process start and xochitl started long before any virtual device we
+  create would exist — untested and possibly a dead end. A swipe and a tap
+  cost the same one gesture either way, so rung 3 buys discoverability, not
+  fewer steps, and Dan (the sole user) will have the manual gesture in
+  muscle memory quickly.
+- **Verified, as Dan asked, whether the swipe hot-zone conflicts with our own
+  tap targets** before shipping rung 4. Read `FBController::touchEvent`
+  (`src/qtfb/FBController.cpp`): the gesture arms on a touch **press at
+  content-pixel y < 100** and fires on **release with y between 100 and
+  400** — y-only, any x, and it does not consume the event (our app still
+  receives the same touch as a normal `INPUT_TOUCH_PRESS`/`RELEASE`). Cross-
+  checked against `BoardRenderer.cs`: `Header` (y 0–130) registers zero hit
+  regions, and every other hit region (the strip's sync button at absolute
+  y 150–250, body panels below y 270) starts well below the y<100 press-arm
+  threshold. **No conflict exists today** — nothing we render currently
+  registers a press starting in the top 100px, so no legitimate tap or drag
+  (including the Todos/Shopping/Agenda list scrolling from Session
+  "8a45df6") can accidentally trigger AppLoad's exit gesture.
+- **Built rung 4:** `Header.cs`'s subtitle (visible on every screen, not just
+  Today — chosen over a dedicated Today-dashboard panel since the 2x2 grid
+  there is already full and the mode-varying bottom-right panel differs
+  between Personal/Work) now reads
+  `"{date}  //  INBOX {status}  //  SWIPE FROM TOP TO WRITE"`. Static text,
+  no new hit region — matches Dan's "quiet, persistent, no tap target" call.
+  Verified visually via the same throwaway render-to-PNG pattern Sessions
+  10–11 used (rendered, eyeballed, deleted, not committed) — fits with
+  comfortable margin at 1404px width, no clipping.
+- Added `docs/device-setup.md`'s new "Inbox capture (Stage 7)" section:
+  documents the exact drag-from-top-center gesture, the convention that the
+  Inbox notebook must be the *only* thing ever opened in xochitl (so it's
+  always the last-opened document when you switch back), and why rung 3 was
+  rejected.
+- **Not done this session** (out of scope for the amendment, which was
+  capture-surface-only): the `.rm` v5 stroke parse, watcher, outbox, S3
+  upload, Claude vision pass, and Needs Review filing — those are the
+  unchanged, separate Stage 7 Build bullets the amendment explicitly left
+  alone.
+- Verified locally: `dotnet build`, `dotnet test`, `dotnet format
+  --verify-no-changes` all green.
+- Changes staged, not committed — Dan reviews and commits manually per
+  standing instruction.
+
+### 2026-07-13 — Session 19 (Stage 7: capture upload — API endpoint + device watcher/outbox)
+
+- Dan asked for the S3 upload piece of Stage 7's capture pipeline, explicit
+  requirement: it must go via the API, not the device talking to S3 directly
+  (keeps S3 credentials off the device entirely — it only ever holds the
+  same shared `x-api-key` it already uses for `/entities`). Asked Dan to
+  scope it (API endpoint only vs. API + device watcher/outbox); he chose the
+  full pair.
+- **API side:** new `PUT /captures/{pageId}` route/Lambda
+  (`Fullview.Api.Functions.CaptureFunction`), backed by a
+  `Fullview.Api.Capture.CaptureService`/`ICaptureStore`/`S3CaptureStore`
+  trio mirroring the existing `SyncService`/`ISyncStore` "no AWS types in
+  the testable layer" pattern. `pageId` is validated against
+  `^[a-zA-Z0-9-]{1,128}$` (hex+dash only, no dots) before it's concatenated
+  into the S3 key (`inbox/{pageId}.rm`) — blocks path-traversal-style keys.
+  API Gateway HTTP APIs base64-encode non-text bodies automatically
+  (`IsBase64Encoded`), so no `binaryMediaTypes` config was needed (that's a
+  REST-API-v1-only concept). Added `AWSSDK.S3` to `Fullview.Api.csproj`.
+- **Infra:** `FullviewStack` now creates a `CaptureFunction` Lambda with
+  `inboxBucket.GrantWrite` (write-only — the Lambda never needs to read/list
+  the bucket back), wires the `PUT /captures/{pageId}` route through the
+  same `x-api-key` REQUEST authorizer as `/entities`, and adds an error
+  alarm matching the other Lambdas' pattern. `inboxBucket` (declared in
+  Stage 1, unused since) is now actually referenced — dropped the `_ =
+  inboxBucket;` no-op.
+- **Device side:** `Fullview.Device.Capture` namespace —
+  `InboxWatcher.ScanAndEnqueue` polls a configured notebook directory
+  (`FULLVIEW_INBOX_NOTEBOOK_PATH`, xochitl's on-disk
+  `<notebookUuid>/<pageUuid>.rm` layout) for pages whose SHA-256 content
+  hash differs from the last-recorded upload, and queues them into a new
+  `capture_outbox` SQLite table (migration v2, alongside a `capture_pages`
+  table tracking per-page last-uploaded hash) — separate from the existing
+  entity `outbox` table since these rows carry a file path to raw bytes,
+  not JSON. Chose polling over a `FileSystemWatcher` on the actual
+  filesystem change events: xochitl itself owns writing these files while
+  the pen is in use, and reasoning about a watch racing a third-party
+  process's save behavior seemed like more risk than it's worth versus
+  polling on the same triggers sync already uses. `CaptureUploadEngine`
+  drains `capture_outbox` one page at a time (same "delete only what was
+  actually sent" contract as `SyncEngine`'s outbox drain), and on a
+  successful `PUT /captures/{pageId}` writes an `InboxPage` entity
+  (`State=Queued`, `S3Key=`the key the API returned) through the normal
+  `DeviceStore.Save` — which queues it into the *existing* entity outbox,
+  so `SyncEngine`'s very next drain (same sync cycle, in every wiring below)
+  pushes it to `/entities` without any new sync path. Wired into
+  `Program.cs` at every place `SyncEngine.SyncOnceAsync` already runs:
+  startup, `FULLVIEW_MODE=sync-once` (headless timer), the manual sync tap,
+  and the periodic/network-reconnect background sync — all no-ops when
+  `FULLVIEW_INBOX_NOTEBOOK_PATH` is unset, matching `FULLVIEW_API_BASE_URL`'s
+  existing "absent config = feature off" convention. `sync-once`'s early
+  "nothing queued, skip" exit now checks both outbox counts.
+- Documented the new env var and the end-to-end upload flow in
+  `docs/device-setup.md` (Runtime configuration table, the sample
+  `/etc/fullview-sync.env` block, and a new "Upload" paragraph under
+  "Inbox capture (Stage 7)" — explicit that the `.rm` stroke parse → PNG →
+  Claude vision → entity filing pipeline is still unbuilt; this session
+  only gets bytes safely off the device and onto S3).
+- Test coverage: `CaptureServiceTests` (valid/invalid page ids, S3 key
+  shape) with a new `InMemoryCaptureStore`; `InboxWatcherTests` (new page
+  queued, unchanged page not re-queued after upload, changed page
+  re-queued, missing directory, non-`.rm` files ignored) and
+  `CaptureUploadEngineTests` (successful drain creates the `InboxPage` and
+  leaves it in the entity outbox, a failed upload leaves `capture_outbox`
+  intact, a second scan after a successful upload doesn't requeue) using a
+  `StubHandler` following `SyncEngineTests`' existing pattern.
+- Verified: `dotnet build`/`test`/`format --verify-no-changes` on the full
+  solution all green, except a pre-existing, unrelated flaky failure in
+  `Fullview.Rendering.Tests` (`HelloWorldScreenTests`/`BoardRendererTests`
+  — a `Dictionary` corrupted by concurrent access in `AppFont.GetGlyph`
+  under xUnit's parallel test runner; reproduces on `main` without this
+  session's changes, not something to fix here). `cdk synth` (with a dummy
+  `FULLVIEW_ALERT_EMAIL`) confirmed the new Lambda, route, S3 write policy,
+  and alarm all synthesize correctly.
+- **Not done this session:** a real `cdk deploy`, live end-to-end test
+  against a deployed API (no `FULLVIEW_INBOX_BUCKET_NAME`/API key
+  available in this session), and everything past "bytes on S3" — the
+  `.rm` v5 stroke parse, PNG render, Claude vision classification, and
+  Needs Review filing remain the unchanged, separate Stage 7 Build bullets.
+- Changes staged, not committed — Dan reviews and commits manually per
+  standing instruction.

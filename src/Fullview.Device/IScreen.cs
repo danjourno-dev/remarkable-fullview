@@ -20,9 +20,20 @@ public interface IScreen : IDisposable
     /// <summary>Blits a grayscale image matching the screen's exact geometry.</summary>
     void WriteImage(Image<L8> image);
 
+    /// <summary>Blits just <paramref name="region"/> of a grayscale image matching the
+    /// screen's exact geometry — so a small change (a tap flash, a single re-sorted panel
+    /// band) doesn't pay the full-frame pixel-conversion cost.</summary>
+    void WriteImage(Image<L8> image, Rectangle region);
+
     /// <summary>Requests an e-ink redraw of the whole panel.</summary>
     void Refresh(bool fullRefresh = true);
 
     /// <summary>Requests a partial e-ink redraw of just <paramref name="region"/>.</summary>
     void RefreshRegion(Rectangle region);
+
+    /// <summary>Same as <see cref="RefreshRegion"/>, but blocks until that specific update has
+    /// physically finished on the panel — used to hold a tap's flash feedback on screen for
+    /// exactly as long as it takes to become visible, instead of guessing with a fixed delay.
+    /// </summary>
+    void RefreshRegionAndWait(Rectangle region);
 }

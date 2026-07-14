@@ -265,6 +265,23 @@ foreach (var input in inputs.GetConsumingEnumerable(cts.Token))
         Console.WriteLine($"[debug] Hit region {hit.Bounds} -> {hit.Action}.");
 
         action = hit.Action;
+
+        // The action below (sync, toggle) can take long enough that the tap otherwise looks
+        // ignored, so flash the tapped region inverted right away. The full re-render further
+        // down always redraws this region back to its correct (non-inverted) state, so there's
+        // no explicit "un-invert" step needed.
+        if (action is BoardAction.SyncNow or BoardAction.ToggleTodo or BoardAction.ToggleShoppingItem)
+        {
+            Canvas.InvertRect(lastRender.Image, hit.Bounds.X, hit.Bounds.Y, hit.Bounds.Width, hit.Bounds.Height);
+            fb.WriteImage(lastRender.Image, hit.Bounds);
+
+            // A todo/shopping toggle is a near-instant local DB write, so without waiting here
+            // the full re-render below can fire before the e-ink panel has physically finished
+            // the flash's partial DU update, making it invisible. RefreshRegionAndWait blocks on
+            // this specific update's own completion signal (not a guessed Sleep), so it holds
+            // for exactly as long as that update actually takes — no more, no less.
+            fb.RefreshRegionAndWait(hit.Bounds);
+        }
     }
 
     var swTotal = Stopwatch.StartNew();
@@ -287,6 +304,7 @@ foreach (var input in inputs.GetConsumingEnumerable(cts.Token))
 
     RenderDiagnostics.Reset();
     var swRender = Stopwatch.StartNew();
+    var previousImage = lastRender.Image;
     lastRender = BoardRenderer.Render(fb.Width, fb.Height, state, version);
     swRender.Stop();
     double textMs = TimeSpan.FromTicks(RenderDiagnostics.TextDrawTicks).TotalMilliseconds;
@@ -296,23 +314,34 @@ foreach (var input in inputs.GetConsumingEnumerable(cts.Token))
         $"[debug] Render breakdown: text={RenderDiagnostics.TextDrawCalls} calls/{textMs:F1}ms, " +
         $"fillRect={RenderDiagnostics.FillRectCalls} calls/{fillRectMs:F1}ms, other={otherRenderMs:F1}ms.");
 
+    // Diff against the previous frame and blit/refresh only the changed row band. The diff is
+    // ground truth for what moved on screen: toggling completion re-sorts the panel (completed
+    // items sink to the bottom), which can shift every row below the tapped one — not just
+    // hitBounds — and the diff picks that up by construction. It also covers un-inverting the
+    // tap flash, since InvertRect mutated previousImage in place before the render.
     var swBlit = Stopwatch.StartNew();
-    fb.WriteImage(lastRender.Image);
+    var dirty = FrameDiff.DirtyRowBand(previousImage, lastRender.Image);
+    previousImage.Dispose();
+    if (dirty is null)
+    {
+        Console.WriteLine("[debug] Frame is pixel-identical to the previous one — skipping blit and refresh.");
+        continue;
+    }
+
+    fb.WriteImage(lastRender.Image, dirty.Value);
     swBlit.Stop();
 
     LogRegions(lastRender);
 
-    // Toggling completion re-sorts the panel (completed items sink to the bottom), which can
-    // shift every row below the tapped one — not just hitBounds — so a full refresh is needed
-    // to avoid leaving stale/duplicate-looking rows from the old sort order on screen.
     var swRefresh = Stopwatch.StartNew();
-    fb.RefreshRegion(new Rectangle(0, 0, fb.Width, fb.Height));
+    fb.RefreshRegion(dirty.Value);
     swRefresh.Stop();
 
     swTotal.Stop();
     Console.WriteLine(
         $"[debug] Timing: db/apply={swApply.ElapsedMilliseconds}ms render={swRender.ElapsedMilliseconds}ms " +
-        $"blit={swBlit.ElapsedMilliseconds}ms refresh-ioctl={swRefresh.ElapsedMilliseconds}ms " +
+        $"diff+blit={swBlit.ElapsedMilliseconds}ms (dirty rows {dirty.Value.Y}..{dirty.Value.Bottom - 1} " +
+        $"of {fb.Height}) refresh-ioctl={swRefresh.ElapsedMilliseconds}ms " +
         $"total-app={swTotal.ElapsedMilliseconds}ms (excludes physical e-ink transition time, which " +
         "happens in hardware after refresh-ioctl returns).");
 }

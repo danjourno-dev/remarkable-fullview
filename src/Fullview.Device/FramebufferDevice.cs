@@ -110,20 +110,28 @@ public sealed class FramebufferDevice : IScreen
     /// panel mode than expected, and this should fail loudly rather than
     /// silently mis-render.
     /// </summary>
-    public void WriteImage(Image<L8> image)
+    public void WriteImage(Image<L8> image) => WriteImage(image, new Rectangle(0, 0, Width, Height));
+
+    /// <summary>Blits just <paramref name="region"/> of the image — see <see cref="IScreen.WriteImage(Image{L8}, Rectangle)"/>.</summary>
+    public void WriteImage(Image<L8> image, Rectangle region)
     {
         if (image.Width != Width || image.Height != Height)
         {
             throw new ArgumentException($"Image is {image.Width}x{image.Height}, framebuffer is {Width}x{Height}.");
         }
 
+        if (region.X < 0 || region.Y < 0 || region.Right > Width || region.Bottom > Height)
+        {
+            throw new ArgumentException($"Region {region} is outside the {Width}x{Height} framebuffer.");
+        }
+
         switch (BitsPerPixel)
         {
             case 16:
-                WriteImageRgb565(image);
+                WriteImageRgb565(image, region);
                 break;
             case 8:
-                WriteImageGray8(image);
+                WriteImageGray8(image, region);
                 break;
             default:
                 throw new NotSupportedException(
@@ -131,41 +139,35 @@ public sealed class FramebufferDevice : IScreen
         }
     }
 
-    private void WriteImageRgb565(Image<L8> image)
+    private void WriteImageRgb565(Image<L8> image, Rectangle region)
     {
         // Building each row in managed memory and Marshal.Copy'ing it as a single block avoids
         // one Marshal.Write* P/Invoke per pixel (~2.6M calls for a full rM1 frame) — that
         // per-call overhead, not the actual byte shuffling, was the dominant blit cost.
         image.ProcessPixelRows(accessor =>
         {
-            for (int y = 0; y < accessor.Height; y++)
+            for (int y = region.Y; y < region.Bottom; y++)
             {
-                var row = accessor.GetRowSpan(y);
-                for (int x = 0; x < row.Length; x++)
-                {
-                    ushort rgb565 = Rgb565.FromGray8[row[x].PackedValue];
-                    _rowBuffer[x * 2] = (byte)rgb565;
-                    _rowBuffer[x * 2 + 1] = (byte)(rgb565 >> 8);
-                }
-
-                Marshal.Copy(_rowBuffer, 0, _map + y * Stride, row.Length * 2);
+                var row = accessor.GetRowSpan(y).Slice(region.X, region.Width);
+                Rgb565.ConvertRow(row, _rowBuffer);
+                Marshal.Copy(_rowBuffer, 0, _map + y * Stride + region.X * 2, region.Width * 2);
             }
         });
     }
 
-    private void WriteImageGray8(Image<L8> image)
+    private void WriteImageGray8(Image<L8> image, Rectangle region)
     {
         image.ProcessPixelRows(accessor =>
         {
-            for (int y = 0; y < accessor.Height; y++)
+            for (int y = region.Y; y < region.Bottom; y++)
             {
-                var row = accessor.GetRowSpan(y);
+                var row = accessor.GetRowSpan(y).Slice(region.X, region.Width);
                 for (int x = 0; x < row.Length; x++)
                 {
                     _rowBuffer[x] = row[x].PackedValue;
                 }
 
-                Marshal.Copy(_rowBuffer, 0, _map + y * Stride, row.Length);
+                Marshal.Copy(_rowBuffer, 0, _map + y * Stride + region.X, region.Width);
             }
         });
     }
@@ -187,8 +189,46 @@ public sealed class FramebufferDevice : IScreen
     public void RefreshRegion(Rectangle region) =>
         SendUpdate(region.X, region.Y, region.Width, region.Height, Fb.UpdateModePartial, Fb.WaveformModeDu);
 
-    private void SendUpdate(int x, int y, int width, int height, int updateMode, int waveformMode)
+    /// <summary>
+    /// Same as <see cref="RefreshRegion"/>, but blocks until this specific update has actually
+    /// finished transitioning on the e-ink panel (MXCFB_WAIT_FOR_UPDATE_COMPLETE) before
+    /// returning — used to hold a tap's flash feedback on screen for exactly as long as it takes
+    /// to become visible, no more and no less, rather than guessing with a fixed Sleep.
+    /// </summary>
+    public void RefreshRegionAndWait(Rectangle region)
     {
+        uint marker = SendUpdate(region.X, region.Y, region.Width, region.Height, Fb.UpdateModePartial, Fb.WaveformModeDu);
+
+        IntPtr buf = Marshal.AllocHGlobal(sizeof(uint));
+        try
+        {
+            Marshal.WriteInt32(buf, unchecked((int)marker));
+            if (Fb.ioctl(_fd, Fb.MXCFB_WAIT_FOR_UPDATE_COMPLETE, buf) < 0)
+            {
+                int errno = Marshal.GetLastWin32Error();
+                Console.Error.WriteLine($"MXCFB_WAIT_FOR_UPDATE_COMPLETE failed (errno {errno}).");
+            }
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buf);
+        }
+    }
+
+    // Every update needs its own marker: MXCFB_WAIT_FOR_UPDATE_COMPLETE waits for a specific
+    // marker value to finish, and the kernel remembers the last-completed marker per value. A
+    // single hardcoded marker (this used to always write 1) meant waiting on it could be
+    // satisfied instantly by an unrelated update — e.g. the previous loop iteration's full-screen
+    // refresh — that happened to finish before this call, rather than the one just issued. That
+    // made RefreshRegionAndWait's hold time nondeterministic (worked sometimes, not others).
+    // Marker 0 is reserved/ignored by the EPDC driver, so the sequence skips it on wraparound.
+    private uint _nextMarker = 1;
+
+    private uint SendUpdate(int x, int y, int width, int height, int updateMode, int waveformMode)
+    {
+        uint marker = _nextMarker;
+        _nextMarker = _nextMarker == uint.MaxValue ? 1 : _nextMarker + 1;
+
         IntPtr buf = Marshal.AllocHGlobal(Fb.MxcfbUpdateDataSize);
         try
         {
@@ -199,7 +239,7 @@ public sealed class FramebufferDevice : IScreen
             Marshal.WriteInt32(buf, Fb.UpdRegionHeightOffset, height);
             Marshal.WriteInt32(buf, Fb.WaveformModeOffset, waveformMode);
             Marshal.WriteInt32(buf, Fb.UpdateModeOffset, updateMode);
-            Marshal.WriteInt32(buf, Fb.UpdateMarkerOffset, 1);
+            Marshal.WriteInt32(buf, Fb.UpdateMarkerOffset, unchecked((int)marker));
             Marshal.WriteInt32(buf, Fb.TempOffset, Fb.TempUseAmbient);
             Marshal.WriteInt32(buf, Fb.FlagsOffset, 0);
 
@@ -215,6 +255,8 @@ public sealed class FramebufferDevice : IScreen
         {
             Marshal.FreeHGlobal(buf);
         }
+
+        return marker;
     }
 
     private static void ZeroMemory(IntPtr ptr, int length)

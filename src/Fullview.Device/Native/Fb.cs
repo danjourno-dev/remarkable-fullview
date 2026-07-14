@@ -28,6 +28,11 @@ internal static class Fb
     // _IOW('F', 0x2E, struct mxcfb_update_data), EPDC v2 layout, size 72.
     public const uint MXCFB_SEND_UPDATE = 0x4048462e;
 
+    // _IOW('F', 0x2F, __u32) — blocks until the update carrying the given marker value has
+    // physically finished on the panel. EPDC v2 (rM1) takes a bare marker, not the
+    // mxcfb_update_marker_data struct v3 controllers use for collision tests.
+    public const uint MXCFB_WAIT_FOR_UPDATE_COMPLETE = 0x4004462f;
+
     // fb_var_screeninfo byte offsets we actually need.
     public const int VarXResOffset = 0;
     public const int VarYResOffset = 4;

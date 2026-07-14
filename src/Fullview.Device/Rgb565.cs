@@ -1,3 +1,5 @@
+using SixLabors.ImageSharp.PixelFormats;
+
 namespace Fullview.Device;
 
 /// <summary>
@@ -23,5 +25,19 @@ internal static class Rgb565
         }
 
         return table;
+    }
+
+    /// <summary>
+    /// Converts a row (or slice of a row) of gray pixels to little-endian RGB565 bytes.
+    /// Shared by FramebufferDevice and QtfbScreen so their blit loops stay identical.
+    /// </summary>
+    public static void ConvertRow(ReadOnlySpan<L8> gray, Span<byte> rgb565)
+    {
+        for (int x = 0; x < gray.Length; x++)
+        {
+            ushort packed = FromGray8[gray[x].PackedValue];
+            rgb565[x * 2] = (byte)packed;
+            rgb565[x * 2 + 1] = (byte)(packed >> 8);
+        }
     }
 }

@@ -1,3 +1,5 @@
+using SixLabors.ImageSharp.PixelFormats;
+
 namespace Fullview.Device.Tests;
 
 /// <summary>
@@ -37,5 +39,27 @@ public class Rgb565Tests
         Assert.Equal(128 >> 3, r);
         Assert.Equal(128 >> 2, g);
         Assert.Equal(128 >> 3, b);
+    }
+
+    [Fact]
+    public void ConvertRow_WritesLittleEndianRgb565PerPixel()
+    {
+        var gray = new L8[] { new(0), new(255), new(128) };
+        var bytes = new byte[gray.Length * 2];
+
+        Rgb565.ConvertRow(gray, bytes);
+
+        for (int x = 0; x < gray.Length; x++)
+        {
+            ushort expected = Rgb565.FromGray8[gray[x].PackedValue];
+            ushort actual = (ushort)(bytes[x * 2] | (bytes[x * 2 + 1] << 8));
+            Assert.Equal(expected, actual);
+        }
+    }
+
+    [Fact]
+    public void ConvertRow_EmptyRow_WritesNothing()
+    {
+        Rgb565.ConvertRow(ReadOnlySpan<L8>.Empty, Span<byte>.Empty);
     }
 }

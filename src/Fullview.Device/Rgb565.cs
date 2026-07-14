@@ -1,3 +1,6 @@
+using System.Runtime.InteropServices;
+using SixLabors.ImageSharp.PixelFormats;
+
 namespace Fullview.Device;
 
 /// <summary>
@@ -23,5 +26,21 @@ internal static class Rgb565
         }
 
         return table;
+    }
+
+    /// <summary>
+    /// Converts a row (or slice of a row) of gray pixels to RGB565 bytes, written as native
+    /// ushorts — the rM1 (armv7l) and every dev host are little-endian, which is the byte
+    /// order the panel expects. Shared by FramebufferDevice and QtfbScreen so their blit
+    /// loops stay identical; the destination may be the mmap'd framebuffer itself.
+    /// </summary>
+    public static void ConvertRow(ReadOnlySpan<L8> gray, Span<byte> rgb565)
+    {
+        var source = MemoryMarshal.AsBytes(gray);
+        var dest = MemoryMarshal.Cast<byte, ushort>(rgb565);
+        for (int x = 0; x < source.Length; x++)
+        {
+            dest[x] = FromGray8[source[x]];
+        }
     }
 }

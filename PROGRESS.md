@@ -551,6 +551,51 @@ still needed to close Stage 5.
   `RefreshRegion` ioctl call can be batched/overlapped with the write —
   not yet investigated. Nothing committed — left staged for Dan to review.
 
+### 2026-07-14 — Session 13 (Stage 4, drawing-time perf pass 2)
+
+- Dan asked what else could improve drawing time, on top of Session 12's
+  fixes and the (then-uncommitted) `FrameDiff` row-band work. Four changes,
+  the two structural ones aimed at latency the pixel path can't touch:
+- **Deferred the post-toggle sync until after the redraw.**
+  `ToggleTodo`/`ToggleShoppingItem` called `TryImmediateSync` inside
+  `Apply()` — with sync enabled, a checkbox tap waited on a full HTTPS
+  round trip (HttpClient timeout 8s) before re-rendering. The toggle cases
+  no longer sync; the main loop enqueues a `SyncTick` right after the
+  frame renders, so the push still piggybacks on the same tap, one loop
+  iteration later. `TryImmediateSync` deleted. The `BackgroundSync`
+  same-reference contract keeps the footer converging as before.
+- **Overlapped CPU work with the tap-flash e-ink transition.**
+  `IScreen.RefreshRegionAndWait` split into `BeginRefreshRegion`
+  (returns the mxcfb update marker; qtfb returns 0) and `WaitForRefresh`
+  (no-op on qtfb, which has no completion message). The main loop now
+  sends the flash update, runs apply/render/diff while the panel is
+  physically transitioning, and only waits on the flash marker right
+  before the final blit — render time hides under the DU transition
+  instead of adding to it. New `flash-wait=` figure in the Timing debug
+  line shows the un-hidden remainder.
+- **Blit converts directly into the mmap'd framebuffer.**
+  `FramebufferDevice`/`QtfbScreen` no longer stage each row through a
+  managed buffer + `Marshal.Copy` (~1872 P/Invokes/frame, every byte
+  written twice): `Rgb565.ConvertRow` now writes native ushorts (LUT
+  lookup, `MemoryMarshal.Cast`) straight into a `Span<byte>` over the
+  mapping. `AllowUnsafeBlocks` enabled in `Fullview.Device.csproj`;
+  `_rowBuffer` fields deleted.
+- **`FrameDiff.DirtyRowBand` → `DirtyRect`:** the diff now also tracks
+  min/max differing column (`CommonPrefixLength` forward + backward scan
+  on differing rows only), so a non-resorting checkbox toggle blits and
+  DU-refreshes a small rect instead of the panel's full 1404px width.
+  `FrameDiffTests` updated with column-bound cases (incl. bounds coming
+  from different rows).
+- In passing: `Canvas.FillRect`'s per-pixel inner loop replaced with
+  `Span.Fill` (was already near-free; tidiness).
+- Verified: `dotnet build`, `dotnet test` (106 tests), and
+  `dotnet format --verify-no-changes` all green. On-device numbers still
+  to be captured by Dan: expect the toggle's `db/apply` to drop to
+  single-digit ms (sync deferred), `diff+blit` to shrink with the
+  narrowed rect + direct-convert blit, and the flash to stay visible
+  (`flash-wait` should absorb whatever the CPU work didn't hide).
+  Nothing committed — left for Dan to review, per standing instruction.
+
 ## Decisions
 
 - **Repo name:** using `remarkable-fullview` (already existed with origin

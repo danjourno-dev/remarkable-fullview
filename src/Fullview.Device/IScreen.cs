@@ -20,9 +20,26 @@ public interface IScreen : IDisposable
     /// <summary>Blits a grayscale image matching the screen's exact geometry.</summary>
     void WriteImage(Image<L8> image);
 
+    /// <summary>Blits just <paramref name="region"/> of a grayscale image matching the
+    /// screen's exact geometry — so a small change (a tap flash, a single re-sorted panel
+    /// band) doesn't pay the full-frame pixel-conversion cost.</summary>
+    void WriteImage(Image<L8> image, Rectangle region);
+
     /// <summary>Requests an e-ink redraw of the whole panel.</summary>
     void Refresh(bool fullRefresh = true);
 
     /// <summary>Requests a partial e-ink redraw of just <paramref name="region"/>.</summary>
     void RefreshRegion(Rectangle region);
+
+    /// <summary>Same as <see cref="RefreshRegion"/>, but returns a marker identifying the
+    /// update so <see cref="WaitForRefresh"/> can later block on its physical completion.
+    /// Splitting request from wait lets the caller re-render/diff on the CPU while the panel
+    /// is still transitioning, instead of serializing the two.</summary>
+    uint BeginRefreshRegion(Rectangle region);
+
+    /// <summary>Blocks until the update identified by <paramref name="marker"/> has physically
+    /// finished on the panel — used to hold a tap's flash feedback on screen for exactly as
+    /// long as it takes to become visible, instead of guessing with a fixed delay. A no-op on
+    /// screens with no completion signal (qtfb).</summary>
+    void WaitForRefresh(uint marker);
 }

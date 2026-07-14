@@ -45,11 +45,7 @@ public static class Canvas
             {
                 for (int py = y0; py < y1; py++)
                 {
-                    var row = accessor.GetRowSpan(py);
-                    for (int px = x0; px < x1; px++)
-                    {
-                        row[px] = new L8(color);
-                    }
+                    accessor.GetRowSpan(py).Slice(x0, x1 - x0).Fill(new L8(color));
                 }
             });
         }
@@ -58,6 +54,32 @@ public static class Canvas
             RenderDiagnostics.FillRectCalls++;
             RenderDiagnostics.FillRectTicks += sw.Elapsed.Ticks;
         }
+    }
+
+    /// <summary>Inverts every pixel in the given rect (255 - value) in place. Used to flash
+    /// instant "pressed" feedback on a tap target before its (possibly slow) action runs.</summary>
+    public static void InvertRect(Image<L8> image, int x, int y, int width, int height)
+    {
+        int x0 = Math.Max(0, x);
+        int y0 = Math.Max(0, y);
+        int x1 = Math.Min(image.Width, x + width);
+        int y1 = Math.Min(image.Height, y + height);
+        if (x1 <= x0 || y1 <= y0)
+        {
+            return;
+        }
+
+        image.ProcessPixelRows(accessor =>
+        {
+            for (int py = y0; py < y1; py++)
+            {
+                var row = accessor.GetRowSpan(py);
+                for (int px = x0; px < x1; px++)
+                {
+                    row[px] = new L8((byte)(255 - row[px].PackedValue));
+                }
+            }
+        });
     }
 
     /// <summary>Draws a horizontal strike-through line, used for completed todos / ticked items.</summary>

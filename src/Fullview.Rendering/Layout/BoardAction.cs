@@ -8,6 +8,11 @@ public abstract record BoardAction
 {
     public sealed record ToggleMode : BoardAction;
 
+    /// <summary>Quits the device app (the header's top-right "X" box), returning to the AppLoad
+    /// launcher. Handled directly in Program.cs's main loop by breaking out of the input loop —
+    /// it never reaches Apply() since it changes no board state.</summary>
+    public sealed record CloseApp : BoardAction;
+
     public sealed record NavigatePrevious : BoardAction;
 
     public sealed record NavigateNext : BoardAction;

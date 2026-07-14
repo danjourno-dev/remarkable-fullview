@@ -22,6 +22,18 @@ public static class Header
     private const int SubtitleSize = 18;
     private const byte Black = Canvas.Black;
 
+    // Top-right "close app" box (a square with an X). Sized/positioned so it clears the header's
+    // double-ruled frame and stays a comfortable tap target on the e-ink panel.
+    private const int CloseButtonSize = 68;
+    private const int CloseButtonInset = 24;
+    private const int CloseBoxThickness = 3;
+
+    /// <summary>Bounds of the top-right close button, in header-local coordinates (which are the
+    /// same as full-screen coordinates since the header sits at 0,0). Depends only on width, so
+    /// Program.cs can register it as a hit region regardless of the header bitmap cache.</summary>
+    public static Rectangle CloseButtonBounds(int width) =>
+        new(width - CloseButtonInset - CloseButtonSize, (Height - CloseButtonSize) / 2, CloseButtonSize, CloseButtonSize);
+
     // Header content only depends on (mode, date, inboxStatus), all of which stay constant across
     // most taps (e.g. toggling a todo) — cache the rendered bitmap and skip re-rasterizing text
     // when nothing here actually changed.
@@ -52,10 +64,30 @@ public static class Header
         int subtitleY = Height - Margin - AppFont.LineHeight(subtitleFont) - 8;
         AppFont.DrawText(image, subtitle, innerX, subtitleY, subtitleFont, Black);
 
+        DrawCloseButton(image, width);
+
         _cache?.Dispose();
         _cache = image;
         _cacheKey = key;
         return image;
+    }
+
+    /// <summary>Draws the top-right close box: a square outline with a diagonal X inside.</summary>
+    private static void DrawCloseButton(Image<L8> image, int width)
+    {
+        var b = CloseButtonBounds(width);
+
+        // Square outline (four edges), matching CloseButtonBounds so the drawn box and the hit
+        // region line up exactly.
+        Canvas.FillRect(image, b.X, b.Y, b.Width, CloseBoxThickness, Black);
+        Canvas.FillRect(image, b.X, b.Bottom - CloseBoxThickness, b.Width, CloseBoxThickness, Black);
+        Canvas.FillRect(image, b.X, b.Y, CloseBoxThickness, b.Height, Black);
+        Canvas.FillRect(image, b.Right - CloseBoxThickness, b.Y, CloseBoxThickness, b.Height, Black);
+
+        // Diagonal X, inset from the box edges.
+        int pad = 18;
+        Canvas.DrawLine(image, b.X + pad, b.Y + pad, b.Right - pad, b.Bottom - pad, CloseBoxThickness, Black);
+        Canvas.DrawLine(image, b.Right - pad, b.Y + pad, b.X + pad, b.Bottom - pad, CloseBoxThickness, Black);
     }
 
     private static string DayName(DayOfWeek day) => day.ToString()[..3].ToUpperInvariant();

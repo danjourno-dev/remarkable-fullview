@@ -49,7 +49,7 @@ public static class AppFont
     // (headers, digits, common letters). Rasterizing each (font, char) once into an ink-coverage
     // mask and blitting it thereafter turns that repeated vector rasterization into a cheap
     // per-pixel blend on every render after the first.
-    private static readonly Dictionary<(string FontKey, char Ch), Glyph> GlyphCache = new();
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<(string FontKey, char Ch), Glyph> GlyphCache = new();
 
     private readonly record struct Glyph(byte[,]? Coverage, int Width, int Height, int OffsetX, int OffsetY, int Advance);
 
@@ -74,17 +74,8 @@ public static class AppFont
         RenderDiagnostics.TextDrawTicks += sw.Elapsed.Ticks;
     }
 
-    private static Glyph GetGlyph(string fontKey, Font font, char ch)
-    {
-        var key = (fontKey, ch);
-        if (!GlyphCache.TryGetValue(key, out var glyph))
-        {
-            glyph = RasterizeGlyph(font, ch);
-            GlyphCache[key] = glyph;
-        }
-
-        return glyph;
-    }
+    private static Glyph GetGlyph(string fontKey, Font font, char ch) =>
+        GlyphCache.GetOrAdd((fontKey, ch), _ => RasterizeGlyph(font, ch));
 
     private static Glyph RasterizeGlyph(Font font, char ch)
     {

@@ -14,13 +14,13 @@ namespace Fullview.Device;
 internal static class FrameDiff
 {
     /// <summary>
-    /// Returns the full-width band of rows that differ between <paramref name="previous"/> and
-    /// <paramref name="current"/>, or null when the frames are pixel-identical. The band spans
-    /// the first through last differing row; unchanged rows in between are included, keeping
-    /// the region a single rectangle whose shape only differs from a full-screen update in top
-    /// and height.
+    /// Returns the bounding rectangle of every pixel that differs between
+    /// <paramref name="previous"/> and <paramref name="current"/>, or null when the frames are
+    /// pixel-identical. Unchanged pixels inside the bounds are included, keeping the region a
+    /// single rectangle — but a small change (one checkbox) yields a small rect, so the blit
+    /// and DU refresh don't pay for the panel's full width the way a row-band diff would.
     /// </summary>
-    public static Rectangle? DirtyRowBand(Image<L8> previous, Image<L8> current)
+    public static Rectangle? DirtyRect(Image<L8> previous, Image<L8> current)
     {
         if (previous.Width != current.Width || previous.Height != current.Height)
         {
@@ -30,38 +30,54 @@ internal static class FrameDiff
 
         int top = -1;
         int bottom = -1;
+        int left = int.MaxValue;
+        int right = -1;
 
         previous.ProcessPixelRows(current, (prev, cur) =>
         {
             for (int y = 0; y < prev.Height; y++)
             {
-                if (!RowsEqual(prev.GetRowSpan(y), cur.GetRowSpan(y)))
+                // L8 is one byte per pixel, so a byte index is a column index.
+                var a = MemoryMarshal.AsBytes(prev.GetRowSpan(y));
+                var b = MemoryMarshal.AsBytes(cur.GetRowSpan(y));
+
+                int first = a.CommonPrefixLength(b);
+                if (first == a.Length)
+                {
+                    continue;
+                }
+
+                if (top < 0)
                 {
                     top = y;
-                    break;
                 }
-            }
 
-            if (top < 0)
-            {
-                return;
-            }
+                bottom = y;
 
-            // The top scan already proved row `top` differs, so this loop always terminates
-            // with bottom >= top.
-            for (int y = prev.Height - 1; y >= top; y--)
-            {
-                if (!RowsEqual(prev.GetRowSpan(y), cur.GetRowSpan(y)))
+                if (first < left)
                 {
-                    bottom = y;
-                    break;
+                    left = first;
+                }
+
+                // Backward scan for this row's last differing column — guaranteed to stop at
+                // `first`, and skipped entirely once some earlier row already pushed `right`
+                // to the frame's final column.
+                if (right < a.Length - 1)
+                {
+                    int last = a.Length - 1;
+                    while (last > right && a[last] == b[last])
+                    {
+                        last--;
+                    }
+
+                    if (last > right)
+                    {
+                        right = last;
+                    }
                 }
             }
         });
 
-        return top < 0 ? null : new Rectangle(0, top, previous.Width, bottom - top + 1);
+        return top < 0 ? null : new Rectangle(left, top, right - left + 1, bottom - top + 1);
     }
-
-    private static bool RowsEqual(ReadOnlySpan<L8> a, ReadOnlySpan<L8> b) =>
-        MemoryMarshal.AsBytes(a).SequenceEqual(MemoryMarshal.AsBytes(b));
 }

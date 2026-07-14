@@ -33,14 +33,12 @@ public sealed class QtfbScreen : IScreen
     private readonly int _socketFd;
     private readonly IntPtr _shm;
     private readonly int _shmSize;
-    private readonly byte[] _rowBuffer;
 
     private QtfbScreen(int socketFd, IntPtr shm, int shmSize)
     {
         _socketFd = socketFd;
         _shm = shm;
         _shmSize = shmSize;
-        _rowBuffer = new byte[Stride];
     }
 
     /// <summary>
@@ -130,17 +128,20 @@ public sealed class QtfbScreen : IScreen
             throw new ArgumentException($"Region {region} is outside the {Width}x{Height} qtfb surface.");
         }
 
-        // Same row-buffer-then-Marshal.Copy approach as FramebufferDevice.WriteImageRgb565 —
-        // one P/Invoke per row instead of one per pixel.
-        image.ProcessPixelRows(accessor =>
+        // Same convert-directly-into-the-mapping approach as FramebufferDevice.WriteImageRgb565
+        // — each pixel is touched once, with no intermediate row buffer or per-row P/Invoke.
+        unsafe
         {
-            for (int y = region.Y; y < region.Bottom; y++)
+            image.ProcessPixelRows(accessor =>
             {
-                var row = accessor.GetRowSpan(y).Slice(region.X, region.Width);
-                Rgb565.ConvertRow(row, _rowBuffer);
-                Marshal.Copy(_rowBuffer, 0, _shm + y * Stride + region.X * 2, region.Width * 2);
-            }
-        });
+                for (int y = region.Y; y < region.Bottom; y++)
+                {
+                    var row = accessor.GetRowSpan(y).Slice(region.X, region.Width);
+                    var dest = new Span<byte>((byte*)_shm + y * Stride + region.X * 2, region.Width * 2);
+                    Rgb565.ConvertRow(row, dest);
+                }
+            });
+        }
     }
 
     /// <summary>
@@ -163,11 +164,20 @@ public sealed class QtfbScreen : IScreen
         SendMessage(_socketFd, BuildUpdateMessage(Qtfb.UPDATE_PARTIAL, region.X, region.Y, region.Width, region.Height));
     }
 
-    /// <summary>Same as <see cref="RefreshRegion"/>: AppLoad's qtfb protocol has no
-    /// update-completion message, unlike /dev/fb0's MXCFB_WAIT_FOR_UPDATE_COMPLETE ioctl (see
-    /// FramebufferDevice). Tap-flash feedback won't get the same guaranteed hold time under qtfb.
-    /// </summary>
-    public void RefreshRegionAndWait(Rectangle region) => RefreshRegion(region);
+    /// <summary>Same as <see cref="RefreshRegion"/>; the returned marker is meaningless (0)
+    /// because AppLoad's qtfb protocol has no update-completion message, unlike /dev/fb0's
+    /// MXCFB_WAIT_FOR_UPDATE_COMPLETE ioctl (see FramebufferDevice).</summary>
+    public uint BeginRefreshRegion(Rectangle region)
+    {
+        RefreshRegion(region);
+        return 0;
+    }
+
+    /// <summary>No-op: qtfb offers no way to wait for a specific update, so tap-flash
+    /// feedback doesn't get the same guaranteed hold time it has on /dev/fb0.</summary>
+    public void WaitForRefresh(uint marker)
+    {
+    }
 
     /// <summary>
     /// Blocks for the next message qtfb pushes over the connection — only MESSAGE_USERINPUT is

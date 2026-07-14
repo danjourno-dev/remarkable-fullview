@@ -31,6 +31,7 @@ public static class BoardRenderer
 
         var header = Header.Render(width, state.Mode, today, inboxStatus);
         Canvas.Composite(image, header, 0, 0);
+        regions.Add(new HitRegion(Header.CloseButtonBounds(width), new BoardAction.CloseApp()));
 
         var stripData = NowNextCalculator.Compute(state.AgendaEvents, state.Now);
         var (strip, syncButtonBounds) = NowNextStrip.Render(width, stripData);

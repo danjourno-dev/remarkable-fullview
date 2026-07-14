@@ -37,6 +37,20 @@ public class BoardRendererTests
     }
 
     [Fact]
+    public void Render_IncludesTopRightCloseButtonRegion()
+    {
+        const int width = 1404;
+        var result = BoardRenderer.Render(width, 1872, EmptyState(SyncContext.Personal, ScreenKind.Today));
+
+        var close = result.Regions.Single(r => r.Action is BoardAction.CloseApp);
+
+        // Lives in the header band (top of screen) and hugs the right edge.
+        Assert.True(close.Bounds.Y < Header.Height);
+        Assert.True(close.Bounds.Right <= width);
+        Assert.True(close.Bounds.X > width / 2);
+    }
+
+    [Fact]
     public void Render_HasNoTapTargetForModeSwitch()
     {
         // Mockup v4: mode switches via the reMarkable's physical hardware button, not a tap.

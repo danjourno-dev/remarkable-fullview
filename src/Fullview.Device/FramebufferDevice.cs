@@ -23,11 +23,6 @@ public sealed class FramebufferDevice : IScreen
     public int BitsPerPixel { get; }
     public int Stride { get; }
 
-    // Reused across blits so a full-frame write doesn't allocate a new row buffer on every
-    // tap (previously each pixel was written with its own Marshal.Write* call — ~2.6M P/Invoke
-    // calls per frame; now one row is built in managed memory and Marshal.Copy'd in a single call).
-    private readonly byte[] _rowBuffer;
-
     private FramebufferDevice(int fd, IntPtr map, int mapLength, int width, int height, int bitsPerPixel, int stride)
     {
         _fd = fd;
@@ -37,7 +32,6 @@ public sealed class FramebufferDevice : IScreen
         Height = height;
         BitsPerPixel = bitsPerPixel;
         Stride = stride;
-        _rowBuffer = new byte[stride];
     }
 
     public static FramebufferDevice Open()
@@ -139,35 +133,31 @@ public sealed class FramebufferDevice : IScreen
         }
     }
 
-    private void WriteImageRgb565(Image<L8> image, Rectangle region)
+    private unsafe void WriteImageRgb565(Image<L8> image, Rectangle region)
     {
-        // Building each row in managed memory and Marshal.Copy'ing it as a single block avoids
-        // one Marshal.Write* P/Invoke per pixel (~2.6M calls for a full rM1 frame) — that
-        // per-call overhead, not the actual byte shuffling, was the dominant blit cost.
+        // Converting straight into a span over the mmap'd frame memory means each pixel is
+        // touched exactly once — the previous convert-into-a-row-buffer-then-Marshal.Copy
+        // approach wrote every byte twice and paid one P/Invoke per row on top.
         image.ProcessPixelRows(accessor =>
         {
             for (int y = region.Y; y < region.Bottom; y++)
             {
                 var row = accessor.GetRowSpan(y).Slice(region.X, region.Width);
-                Rgb565.ConvertRow(row, _rowBuffer);
-                Marshal.Copy(_rowBuffer, 0, _map + y * Stride + region.X * 2, region.Width * 2);
+                var dest = new Span<byte>((byte*)_map + y * Stride + region.X * 2, region.Width * 2);
+                Rgb565.ConvertRow(row, dest);
             }
         });
     }
 
-    private void WriteImageGray8(Image<L8> image, Rectangle region)
+    private unsafe void WriteImageGray8(Image<L8> image, Rectangle region)
     {
         image.ProcessPixelRows(accessor =>
         {
             for (int y = region.Y; y < region.Bottom; y++)
             {
                 var row = accessor.GetRowSpan(y).Slice(region.X, region.Width);
-                for (int x = 0; x < row.Length; x++)
-                {
-                    _rowBuffer[x] = row[x].PackedValue;
-                }
-
-                Marshal.Copy(_rowBuffer, 0, _map + y * Stride + region.X, region.Width);
+                var dest = new Span<byte>((byte*)_map + y * Stride + region.X, region.Width);
+                MemoryMarshal.AsBytes(row).CopyTo(dest);
             }
         });
     }
@@ -190,15 +180,21 @@ public sealed class FramebufferDevice : IScreen
         SendUpdate(region.X, region.Y, region.Width, region.Height, Fb.UpdateModePartial, Fb.WaveformModeDu);
 
     /// <summary>
-    /// Same as <see cref="RefreshRegion"/>, but blocks until this specific update has actually
-    /// finished transitioning on the e-ink panel (MXCFB_WAIT_FOR_UPDATE_COMPLETE) before
-    /// returning — used to hold a tap's flash feedback on screen for exactly as long as it takes
-    /// to become visible, no more and no less, rather than guessing with a fixed Sleep.
+    /// Same as <see cref="RefreshRegion"/> but returns the update's marker, so the caller can
+    /// do CPU work (re-render, diff) while the panel physically transitions and only
+    /// <see cref="WaitForRefresh"/> right before overwriting the flashed pixels.
     /// </summary>
-    public void RefreshRegionAndWait(Rectangle region)
-    {
-        uint marker = SendUpdate(region.X, region.Y, region.Width, region.Height, Fb.UpdateModePartial, Fb.WaveformModeDu);
+    public uint BeginRefreshRegion(Rectangle region) =>
+        SendUpdate(region.X, region.Y, region.Width, region.Height, Fb.UpdateModePartial, Fb.WaveformModeDu);
 
+    /// <summary>
+    /// Blocks until the update identified by <paramref name="marker"/> has actually finished
+    /// transitioning on the e-ink panel (MXCFB_WAIT_FOR_UPDATE_COMPLETE) — used to hold a tap's
+    /// flash feedback on screen for exactly as long as it takes to become visible, no more and
+    /// no less, rather than guessing with a fixed Sleep.
+    /// </summary>
+    public void WaitForRefresh(uint marker)
+    {
         IntPtr buf = Marshal.AllocHGlobal(sizeof(uint));
         try
         {
@@ -220,7 +216,7 @@ public sealed class FramebufferDevice : IScreen
     // single hardcoded marker (this used to always write 1) meant waiting on it could be
     // satisfied instantly by an unrelated update — e.g. the previous loop iteration's full-screen
     // refresh — that happened to finish before this call, rather than the one just issued. That
-    // made RefreshRegionAndWait's hold time nondeterministic (worked sometimes, not others).
+    // made WaitForRefresh's hold time nondeterministic (worked sometimes, not others).
     // Marker 0 is reserved/ignored by the EPDC driver, so the sequence skips it on wraparound.
     private uint _nextMarker = 1;
 

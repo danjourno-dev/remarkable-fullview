@@ -18,6 +18,9 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- The screen blitters (FramebufferDevice, QtfbScreen) convert pixels directly into a
+         Span over their mmap'd frame memory instead of staging through a managed buffer. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
 </Project>

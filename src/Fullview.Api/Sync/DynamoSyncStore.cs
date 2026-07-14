@@ -41,6 +41,15 @@ public sealed class DynamoSyncStore : ISyncStore
             ["data"] = JsonSerializer.Serialize<SyncEntity>(entity, SyncJson.Options)
         };
 
+        // A completed reminder self-destructs 24h after it was completed: stamp the native
+        // DynamoDB TTL attribute (epoch seconds) so the service reaper hard-deletes the row.
+        // We only set `ttl` while Completed — PutItem replaces the whole item, so un-completing
+        // a Todo (a fresh PutAsync with Completed=false) drops the attribute and cancels expiry.
+        if (CompletionTtlEpochSeconds(entity) is { } ttl)
+        {
+            document["ttl"] = ttl;
+        }
+
         await _table.PutItemAsync(document, ct);
     }
 
@@ -65,6 +74,15 @@ public sealed class DynamoSyncStore : ISyncStore
 
         return items;
     }
+
+    /// <summary>Native-TTL expiry stamp (Unix epoch seconds) for an entity, or null if it
+    /// should never auto-expire. A completed <see cref="Todo"/> expires 24h after completion;
+    /// <see cref="SyncEntity.UpdatedAt"/> is the LWW clock, so on a Completed=true write it is
+    /// the completion time.</summary>
+    public static long? CompletionTtlEpochSeconds(SyncEntity entity) =>
+        entity is Todo { Completed: true }
+            ? entity.UpdatedAt.ToUniversalTime().AddHours(24).ToUnixTimeSeconds()
+            : null;
 
     private static SyncEntity Deserialize(Document document)
     {

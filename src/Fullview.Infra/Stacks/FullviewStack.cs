@@ -43,6 +43,11 @@ public sealed class FullviewStack : Stack
             PartitionKey = new DynamoAttribute { Name = "pk", Type = AttributeType.STRING },
             SortKey = new DynamoAttribute { Name = "sk", Type = AttributeType.STRING },
             BillingMode = BillingMode.PAY_PER_REQUEST,
+            // Completed reminders self-expire 24h after completion: DynamoSyncStore stamps
+            // a `ttl` epoch-seconds attribute on a completed Todo and DynamoDB's native TTL
+            // reaper hard-deletes the row once it passes — no reaper Lambda needed. Rows
+            // without the attribute (everything else) are never expired.
+            TimeToLiveAttribute = "ttl",
             PointInTimeRecoverySpecification = new PointInTimeRecoverySpecification
             {
                 PointInTimeRecoveryEnabled = true

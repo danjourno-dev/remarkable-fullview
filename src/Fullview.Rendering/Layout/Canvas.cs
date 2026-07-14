@@ -45,11 +45,7 @@ public static class Canvas
             {
                 for (int py = y0; py < y1; py++)
                 {
-                    var row = accessor.GetRowSpan(py);
-                    for (int px = x0; px < x1; px++)
-                    {
-                        row[px] = new L8(color);
-                    }
+                    accessor.GetRowSpan(py).Slice(x0, x1 - x0).Fill(new L8(color));
                 }
             });
         }

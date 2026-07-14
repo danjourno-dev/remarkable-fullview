@@ -238,6 +238,12 @@ foreach (var input in inputs.GetConsumingEnumerable(cts.Token))
 {
     BoardAction? action = null;
 
+    // Set when a tap flashed its region inverted: the flash's e-ink update is in flight while
+    // the CPU work below (apply/render/diff) runs, and must be waited on before the final blit
+    // overwrites those pixels — otherwise the flash may never become visible.
+    Rectangle? flashRegion = null;
+    uint flashMarker = 0;
+
     if (input.Kind == DeviceInputKind.HardwareButton)
     {
         action = new BoardAction.ToggleMode();
@@ -266,21 +272,28 @@ foreach (var input in inputs.GetConsumingEnumerable(cts.Token))
 
         action = hit.Action;
 
+        // Close button: quit the app (back to the AppLoad launcher). Handled here rather than in
+        // Apply — it changes no board state, it just ends the input loop and lets the graceful
+        // shutdown below (dispose devices, "Exiting.") run.
+        if (action is BoardAction.CloseApp)
+        {
+            Console.WriteLine("Close button tapped — exiting.");
+            break;
+        }
+
         // The action below (sync, toggle) can take long enough that the tap otherwise looks
         // ignored, so flash the tapped region inverted right away. The full re-render further
         // down always redraws this region back to its correct (non-inverted) state, so there's
-        // no explicit "un-invert" step needed.
+        // no explicit "un-invert" step needed. Only the update *request* is sent here — the
+        // wait for its physical completion happens just before the final blit below, so the
+        // apply/render/diff CPU work runs concurrently with the panel's DU transition instead
+        // of after it.
         if (action is BoardAction.SyncNow or BoardAction.ToggleTodo or BoardAction.ToggleShoppingItem)
         {
             Canvas.InvertRect(lastRender.Image, hit.Bounds.X, hit.Bounds.Y, hit.Bounds.Width, hit.Bounds.Height);
             fb.WriteImage(lastRender.Image, hit.Bounds);
-
-            // A todo/shopping toggle is a near-instant local DB write, so without waiting here
-            // the full re-render below can fire before the e-ink panel has physically finished
-            // the flash's partial DU update, making it invisible. RefreshRegionAndWait blocks on
-            // this specific update's own completion signal (not a guessed Sleep), so it holds
-            // for exactly as long as that update actually takes — no more, no less.
-            fb.RefreshRegionAndWait(hit.Bounds);
+            flashRegion = hit.Bounds;
+            flashMarker = fb.BeginRefreshRegion(hit.Bounds);
         }
     }
 
@@ -302,6 +315,17 @@ foreach (var input in inputs.GetConsumingEnumerable(cts.Token))
 
     state = state with { LastSyncedAt = settings.GetLastSyncedAt(), PendingSyncCount = store.OutboxCount() };
 
+    // Toggles used to sync inline inside Apply, which made the checkbox redraw wait on a full
+    // HTTPS round-trip (up to the HttpClient's 8s timeout). Instead, queue a background sync
+    // to run *after* this frame is on screen: the main thread is the only consumer of
+    // `inputs`, so the SyncTick is processed on the next loop iteration, and BackgroundSync's
+    // existing "same reference = nothing to redraw" contract keeps the footer's
+    // pending-count/last-synced text converging one frame later.
+    if (action is BoardAction.ToggleTodo or BoardAction.ToggleShoppingItem && syncEngine is not null)
+    {
+        inputs.Add(new DeviceInput(DeviceInputKind.SyncTick, 0, 0));
+    }
+
     RenderDiagnostics.Reset();
     var swRender = Stopwatch.StartNew();
     var previousImage = lastRender.Image;
@@ -314,18 +338,42 @@ foreach (var input in inputs.GetConsumingEnumerable(cts.Token))
         $"[debug] Render breakdown: text={RenderDiagnostics.TextDrawCalls} calls/{textMs:F1}ms, " +
         $"fillRect={RenderDiagnostics.FillRectCalls} calls/{fillRectMs:F1}ms, other={otherRenderMs:F1}ms.");
 
-    // Diff against the previous frame and blit/refresh only the changed row band. The diff is
+    // Diff against the previous frame and blit/refresh only the changed rectangle. The diff is
     // ground truth for what moved on screen: toggling completion re-sorts the panel (completed
     // items sink to the bottom), which can shift every row below the tapped one — not just
     // hitBounds — and the diff picks that up by construction. It also covers un-inverting the
     // tap flash, since InvertRect mutated previousImage in place before the render.
     var swBlit = Stopwatch.StartNew();
-    var dirty = FrameDiff.DirtyRowBand(previousImage, lastRender.Image);
+    var dirty = FrameDiff.DirtyRect(previousImage, lastRender.Image);
     previousImage.Dispose();
     if (dirty is null)
     {
+        // Never expected when a flash was drawn (the inverted pixels always differ from the
+        // re-render), but if it somehow happens the flash must still be undone — otherwise the
+        // inverted region stays on the panel indefinitely.
+        if (flashRegion is { } stale)
+        {
+            fb.WaitForRefresh(flashMarker);
+            fb.WriteImage(lastRender.Image, stale);
+            fb.RefreshRegion(stale);
+        }
+
         Console.WriteLine("[debug] Frame is pixel-identical to the previous one — skipping blit and refresh.");
         continue;
+    }
+
+    // Hold the tap flash until its DU update has physically completed — everything between
+    // BeginRefreshRegion and here (apply/render/diff) ran while the panel was transitioning,
+    // so this wait only covers whatever transition time the CPU work didn't already absorb.
+    // Timed outside swBlit: it's panel-transition remainder, not blit cost.
+    long flashWaitMs = 0;
+    if (flashRegion is not null)
+    {
+        swBlit.Stop();
+        var swFlashWait = Stopwatch.StartNew();
+        fb.WaitForRefresh(flashMarker);
+        flashWaitMs = swFlashWait.ElapsedMilliseconds;
+        swBlit.Start();
     }
 
     fb.WriteImage(lastRender.Image, dirty.Value);
@@ -340,8 +388,8 @@ foreach (var input in inputs.GetConsumingEnumerable(cts.Token))
     swTotal.Stop();
     Console.WriteLine(
         $"[debug] Timing: db/apply={swApply.ElapsedMilliseconds}ms render={swRender.ElapsedMilliseconds}ms " +
-        $"diff+blit={swBlit.ElapsedMilliseconds}ms (dirty rows {dirty.Value.Y}..{dirty.Value.Bottom - 1} " +
-        $"of {fb.Height}) refresh-ioctl={swRefresh.ElapsedMilliseconds}ms " +
+        $"diff+blit={swBlit.ElapsedMilliseconds}ms (dirty rect {dirty.Value} of {fb.Width}x{fb.Height}) " +
+        $"flash-wait={flashWaitMs}ms refresh-ioctl={swRefresh.ElapsedMilliseconds}ms " +
         $"total-app={swTotal.ElapsedMilliseconds}ms (excludes physical e-ink transition time, which " +
         "happens in hardware after refresh-ioctl returns).");
 }
@@ -427,23 +475,6 @@ static void AddApiKeyHeader(HttpClient http, string? apiKey)
     {
         Console.WriteLine("[sync] FULLVIEW_API_KEY not set; /sync calls will be rejected by the API.");
     }
-}
-
-// Toggles are the highest-value thing to get off the device quickly (they're what a
-// caregiver checking the web view actually cares about), so we piggyback a drain attempt
-// on the same request/render cycle instead of waiting for the next app-open or timer tick.
-// Same fire-now-fail-silent contract as every other SyncOnceAsync call site: a failure just
-// leaves the outbox for the next trigger to retry, never blocks or surfaces an error to the
-// user beyond the footer's existing pending-count/last-synced display.
-static void TryImmediateSync(SyncEngine? syncEngine)
-{
-    if (syncEngine is null)
-    {
-        return;
-    }
-
-    var result = syncEngine.SyncOnceAsync(CancellationToken.None).GetAwaiter().GetResult();
-    Console.WriteLine($"[sync] Post-toggle sync: {result.Outcome}.");
 }
 
 // Re-scans the Inbox notebook for pages changed since app open (e.g. a page written earlier
@@ -566,14 +597,16 @@ static BoardState Apply(
         case BoardAction.NavigateToScreen(var screen):
             return state.WithScreen(screen) with { Now = DateTimeOffset.Now };
 
+        // No inline sync here: toggles are the highest-value thing to get off the device
+        // quickly, but the push must not block the redraw — the main loop enqueues a SyncTick
+        // right after this frame renders (see the comment there), so the drain still
+        // piggybacks on the same tap, just one loop iteration later.
         case BoardAction.ToggleTodo(var todoId):
             store.ToggleTodoCompleted(todoId, deviceId);
-            TryImmediateSync(syncEngine);
             return state with { Todos = store.Query<Todo>(), Now = DateTimeOffset.Now };
 
         case BoardAction.ToggleShoppingItem(var itemId):
             store.ToggleShoppingItemChecked(itemId, deviceId);
-            TryImmediateSync(syncEngine);
             return state with { ShoppingItems = store.Query<ShoppingItem>(), Now = DateTimeOffset.Now };
 
         case BoardAction.OpenRecipe(var recipeId):

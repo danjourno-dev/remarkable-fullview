@@ -4,9 +4,9 @@ using SixLabors.ImageSharp.PixelFormats;
 namespace Fullview.Device.Tests;
 
 /// <summary>
-/// Verifies the frame diff (FrameDiff.cs) that decides which row band gets blitted and
-/// e-ink-refreshed after each render. A false-negative here would leave stale rows visible
-/// on the panel, so the edge rows and multi-change spans matter.
+/// Verifies the frame diff (FrameDiff.cs) that decides which rectangle gets blitted and
+/// e-ink-refreshed after each render. A false-negative here would leave stale pixels visible
+/// on the panel, so the edge rows/columns and multi-change spans matter.
 /// </summary>
 public class FrameDiffTests
 {
@@ -29,60 +29,72 @@ public class FrameDiffTests
         using var previous = SolidFrame(10, 20);
         using var current = SolidFrame(10, 20);
 
-        Assert.Null(FrameDiff.DirtyRowBand(previous, current));
+        Assert.Null(FrameDiff.DirtyRect(previous, current));
     }
 
     [Fact]
-    public void SinglePixelChange_ReturnsFullWidthOneRowBand()
+    public void SinglePixelChange_ReturnsOnePixelRect()
     {
         using var previous = SolidFrame(10, 20);
         using var current = SolidFrame(10, 20);
         current[3, 7] = new L8(0);
 
-        var dirty = FrameDiff.DirtyRowBand(previous, current);
-
-        Assert.Equal(new Rectangle(0, 7, 10, 1), dirty);
+        Assert.Equal(new Rectangle(3, 7, 1, 1), FrameDiff.DirtyRect(previous, current));
     }
 
     [Fact]
-    public void ChangeInFirstRow_IsDetected()
+    public void ChangeInTopLeftCorner_IsDetected()
     {
         using var previous = SolidFrame(10, 20);
         using var current = SolidFrame(10, 20);
         current[0, 0] = new L8(0);
 
-        Assert.Equal(new Rectangle(0, 0, 10, 1), FrameDiff.DirtyRowBand(previous, current));
+        Assert.Equal(new Rectangle(0, 0, 1, 1), FrameDiff.DirtyRect(previous, current));
     }
 
     [Fact]
-    public void ChangeInLastRow_IsDetected()
+    public void ChangeInBottomRightCorner_IsDetected()
     {
         using var previous = SolidFrame(10, 20);
         using var current = SolidFrame(10, 20);
         current[9, 19] = new L8(0);
 
-        Assert.Equal(new Rectangle(0, 19, 10, 1), FrameDiff.DirtyRowBand(previous, current));
+        Assert.Equal(new Rectangle(9, 19, 1, 1), FrameDiff.DirtyRect(previous, current));
     }
 
     [Fact]
-    public void DisjointChanges_ReturnOneSpanningBand()
+    public void DisjointChanges_ReturnOneSpanningRect()
     {
         using var previous = SolidFrame(10, 20);
         using var current = SolidFrame(10, 20);
         current[5, 4] = new L8(0);
         current[2, 15] = new L8(0);
 
-        // Rows 5..14 are unchanged but the band must still be a single rectangle.
-        Assert.Equal(new Rectangle(0, 4, 10, 12), FrameDiff.DirtyRowBand(previous, current));
+        // Rows 5..14 and columns 3..4 are unchanged, but the result must still be a single
+        // rectangle spanning both changes.
+        Assert.Equal(new Rectangle(2, 4, 4, 12), FrameDiff.DirtyRect(previous, current));
     }
 
     [Fact]
-    public void EveryRowChanged_ReturnsFullFrame()
+    public void ColumnBounds_ComeFromDifferentRows()
+    {
+        using var previous = SolidFrame(10, 20);
+        using var current = SolidFrame(10, 20);
+        // Leftmost change on one row, rightmost on another — the rect must take the min/max
+        // column across all differing rows, not just the first differing row's own span.
+        current[1, 6] = new L8(0);
+        current[8, 9] = new L8(0);
+
+        Assert.Equal(new Rectangle(1, 6, 8, 4), FrameDiff.DirtyRect(previous, current));
+    }
+
+    [Fact]
+    public void EveryPixelChanged_ReturnsFullFrame()
     {
         using var previous = SolidFrame(10, 20, 255);
         using var current = SolidFrame(10, 20, 0);
 
-        Assert.Equal(new Rectangle(0, 0, 10, 20), FrameDiff.DirtyRowBand(previous, current));
+        Assert.Equal(new Rectangle(0, 0, 10, 20), FrameDiff.DirtyRect(previous, current));
     }
 
     [Fact]
@@ -91,6 +103,6 @@ public class FrameDiffTests
         using var previous = SolidFrame(10, 20);
         using var current = SolidFrame(10, 21);
 
-        Assert.Throws<ArgumentException>(() => FrameDiff.DirtyRowBand(previous, current));
+        Assert.Throws<ArgumentException>(() => FrameDiff.DirtyRect(previous, current));
     }
 }

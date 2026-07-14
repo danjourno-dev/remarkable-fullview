@@ -157,6 +157,33 @@ public sealed class QtfbScreen : IScreen
         SendMessage(_socketFd, BuildUpdateMessage(Qtfb.UPDATE_ALL, 0, 0, Width, Height));
     }
 
+    /// <summary>
+    /// De-ghost flash: fill the whole panel solid black, then solid white, each a full refresh,
+    /// to erase whatever faint image (e.g. the splash wordmark) a normal refresh leaves behind.
+    /// Unlike <see cref="FramebufferDevice"/> there is no update-completion message to wait on
+    /// (see <see cref="WaitForRefresh"/>), so a fixed settle delay stands in for the real signal
+    /// — long enough that the qtfb server has read the shared surface and driven the full
+    /// waveform before the next frame overwrites it. Tune <see cref="FullRefreshSettleMs"/>
+    /// against real hardware if the flash looks partial or the two transitions run together.
+    /// </summary>
+    public void Flash()
+    {
+        FlashSolid(0);
+        FlashSolid(255);
+    }
+
+    // The qtfb protocol acknowledges nothing, so this is a deliberate guess at how long a full
+    // GC16 panel transition takes on the rM1 — confirm on device (see Flash's remarks).
+    private const int FullRefreshSettleMs = 700;
+
+    private void FlashSolid(byte gray)
+    {
+        using var solid = new Image<L8>(Width, Height, new L8(gray));
+        WriteImage(solid);
+        Refresh(fullRefresh: true);
+        Thread.Sleep(FullRefreshSettleMs);
+    }
+
     /// <summary>Requests a partial e-ink redraw of just <paramref name="region"/>.</summary>
     public void RefreshRegion(Rectangle region)
     {

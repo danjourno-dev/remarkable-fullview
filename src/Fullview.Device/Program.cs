@@ -101,31 +101,12 @@ if (string.Equals(runMode, "sync-once", StringComparison.OrdinalIgnoreCase))
     Environment.Exit(syncOnceResult.Outcome == SyncOutcome.Succeeded ? 0 : 1);
 }
 
-// A fresh read on every open (Stage 5): catches up on anything that changed via web/other
-// devices while this one was closed. Short timeout so a slow/absent network doesn't stall
-// startup for long — a failed attempt just leaves the local cache as-is (B2: stale is fine,
-// never hidden) and the footer will read "NOT SYNCED" or the last-known time.
-SyncEngine? syncEngine = null;
-CaptureUploadEngine? captureEngine = null;
-if (apiBaseUrl is not null)
-{
-    var syncHttp = new HttpClient(CreateHttpHandler()) { BaseAddress = new Uri(apiBaseUrl), Timeout = TimeSpan.FromSeconds(8) };
-    AddApiKeyHeader(syncHttp, apiKey);
-    captureEngine = new CaptureUploadEngine(captureStore, store, new CaptureClient(syncHttp), deviceId);
-    captureEngine.DrainAsync(CancellationToken.None).GetAwaiter().GetResult();
-
-    syncEngine = new SyncEngine(store, settings, new SyncClient(syncHttp));
-    var startupResult = syncEngine.SyncOnceAsync(CancellationToken.None).GetAwaiter().GetResult();
-    Console.WriteLine($"[sync] Startup sync: {startupResult.Outcome}.");
-}
-else
-{
-    Console.WriteLine("[sync] FULLVIEW_API_BASE_URL not set; sync disabled.");
-}
-
-// AppLoad (tools/device/appload/external.manifest.json, qtfb: true) hands us a framebuffer
-// key via QTFB_KEY when it launches us from the launcher; its absence means we were
-// hand-launched over SSH and should fall back to driving /dev/fb0 and evdev directly.
+// Open the framebuffer and put "FullView" on the panel before anything network-blocking
+// runs (the startup sync below can spend up to its 8s timeout), so launch feels instant
+// instead of leaving the previous screen up while the app loads. AppLoad
+// (tools/device/appload/external.manifest.json, qtfb: true) hands us a framebuffer key via
+// QTFB_KEY when it launches us from the launcher; its absence means we were hand-launched
+// over SSH and should fall back to driving /dev/fb0 and evdev directly.
 string? qtfbKeyRaw = Environment.GetEnvironmentVariable("QTFB_KEY");
 using IScreen fb = qtfbKeyRaw is { } raw && int.TryParse(raw, out int qtfbKey)
     ? QtfbScreen.Connect(qtfbKey)
@@ -133,6 +114,39 @@ using IScreen fb = qtfbKeyRaw is { } raw && int.TryParse(raw, out int qtfbKey)
 Console.WriteLine(fb is QtfbScreen
     ? $"Connected to qtfb (QTFB_KEY={qtfbKeyRaw}) — {fb.Width}x{fb.Height} RGB565."
     : $"Opened {FramebufferDevice.DevicePath} — {fb.Width}x{fb.Height}.");
+
+using (var splash = SplashScreen.Render(fb.Width, fb.Height))
+{
+    fb.WriteImage(splash);
+    // Fast (DU-class) full-panel refresh, not a GC16 one: the wordmark is pure black-on-white
+    // with no grays, so it needs no grayscale waveform and DU puts it on the panel in a
+    // fraction of a full refresh's time — the whole point of the splash is the quickest
+    // possible "app launched" feedback. Any ghosting DU leaves is erased by fb.Flash() below.
+    fb.RefreshRegion(new Rectangle(0, 0, fb.Width, fb.Height));
+}
+Console.WriteLine("Rendered splash screen.");
+
+// A fresh read on every open (Stage 5): catches up on anything that changed via web/other
+// devices while this one was closed. Deliberately NOT run inline here — doing so used to
+// block the first board render on a full network round-trip (up to the 8s timeout below),
+// leaving the splash up while the app "loaded". Instead the engines are wired up now and a
+// SyncTick is enqueued once the input loop is running (see below), so the board paints
+// immediately from the local cache (B2: stale is fine, never hidden — the footer reads the
+// last-known sync time) and the catch-up sync runs on the first loop iteration, after the
+// app is on screen. Short timeout so a slow/absent network doesn't stall that sync for long.
+SyncEngine? syncEngine = null;
+CaptureUploadEngine? captureEngine = null;
+if (apiBaseUrl is not null)
+{
+    var syncHttp = new HttpClient(CreateHttpHandler()) { BaseAddress = new Uri(apiBaseUrl), Timeout = TimeSpan.FromSeconds(8) };
+    AddApiKeyHeader(syncHttp, apiKey);
+    captureEngine = new CaptureUploadEngine(captureStore, store, new CaptureClient(syncHttp), deviceId);
+    syncEngine = new SyncEngine(store, settings, new SyncClient(syncHttp));
+}
+else
+{
+    Console.WriteLine("[sync] FULLVIEW_API_BASE_URL not set; sync disabled.");
+}
 
 var mode = settings.GetMode();
 var state = new BoardState(
@@ -150,6 +164,15 @@ var state = new BoardState(
     PendingSyncCount: store.OutboxCount());
 
 var lastRender = BoardRenderer.Render(fb.Width, fb.Height, state, version);
+
+// Clear the splash's ghost before the board goes up: e-ink retains a faint image of the
+// "FullView" wordmark that a single GC16 board refresh won't fully erase, leaving it visible
+// behind the board. Driving the whole panel to solid black then solid white first (the
+// standard e-ink de-ghost flash) resets every cell so the board lands on a clean field. Done
+// after the board is rendered so the CPU render work overlaps the splash still being on
+// screen, keeping the flash-to-board gap as short as possible.
+fb.Flash();
+
 fb.WriteImage(lastRender.Image);
 LogRegions(lastRender);
 fb.Refresh(fullRefresh: true);
@@ -233,6 +256,17 @@ using var syncTimer = syncEngine is not null
         TimeSpan.FromMinutes(5),
         TimeSpan.FromMinutes(5))
     : null;
+
+// Startup catch-up sync, now that the board is on screen and the loop is about to consume
+// input: this replaces the old blocking startup sync. It's processed as the first loop
+// iteration via the BackgroundSync path (capture drain + SyncOnceAsync, redraw only if
+// something changed), so the network round-trip runs after the app has loaded and — like
+// every other sync — on the main thread, never touching the SQLite store off-thread.
+if (syncEngine is not null)
+{
+    DeviceLog.Debug("[sync] Enqueuing startup catch-up sync.");
+    inputs.Add(new DeviceInput(DeviceInputKind.SyncTick, 0, 0));
+}
 
 foreach (var input in inputs.GetConsumingEnumerable(cts.Token))
 {

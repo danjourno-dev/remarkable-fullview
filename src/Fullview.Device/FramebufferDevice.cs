@@ -172,6 +172,27 @@ public sealed class FramebufferDevice : IScreen
         SendUpdate(0, 0, Width, Height, fullRefresh ? Fb.UpdateModeFull : Fb.UpdateModePartial, Fb.WaveformModeGc16);
 
     /// <summary>
+    /// De-ghost flash: fill the whole panel solid black, wait for that GC16 refresh to
+    /// physically complete, then do the same in solid white. Each cell is driven hard to both
+    /// rails, which erases whatever faint image (e.g. the splash wordmark) a normal refresh
+    /// leaves behind. Waiting on each update's marker before writing the next frame is what
+    /// makes the two transitions actually happen in sequence rather than being coalesced.
+    /// </summary>
+    public void Flash()
+    {
+        FlashSolid(0);
+        FlashSolid(255);
+    }
+
+    private void FlashSolid(byte gray)
+    {
+        using var solid = new Image<L8>(Width, Height, new L8(gray));
+        WriteImage(solid);
+        uint marker = SendUpdate(0, 0, Width, Height, Fb.UpdateModeFull, Fb.WaveformModeGc16);
+        WaitForRefresh(marker);
+    }
+
+    /// <summary>
     /// Requests a partial e-ink redraw of just <paramref name="region"/>, using the fast
     /// monochrome (DU) waveform — for tap-to-complete and mode-toggle updates, where
     /// redrawing the whole panel with GC16 would be needlessly slow.

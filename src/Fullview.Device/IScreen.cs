@@ -28,6 +28,11 @@ public interface IScreen : IDisposable
     /// <summary>Requests an e-ink redraw of the whole panel.</summary>
     void Refresh(bool fullRefresh = true);
 
+    /// <summary>Drives the whole panel to solid black and then to solid white, each a full
+    /// GC16 refresh held until it has physically completed, to clear e-ink ghosting (e.g. the
+    /// splash wordmark) before new content is drawn over a genuinely clean field.</summary>
+    void Flash();
+
     /// <summary>Requests a partial e-ink redraw of just <paramref name="region"/>.</summary>
     void RefreshRegion(Rectangle region);
 

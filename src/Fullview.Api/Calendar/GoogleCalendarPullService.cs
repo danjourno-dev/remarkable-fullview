@@ -19,6 +19,14 @@ public sealed class GoogleCalendarPullService
     private static readonly TimeSpan LookBack = TimeSpan.FromDays(1);
     private static readonly TimeSpan LookAhead = TimeSpan.FromDays(8);
 
+    /// <summary>How often to force a full (non-incremental) fetch purely to run
+    /// <see cref="CalendarReconciler"/>, even when the incremental sync token is still
+    /// valid. Google's token can stay valid for a long time, and per-event delta tracking
+    /// (the "cancelled"/"moved" branches below) both key off Google's own event id — which
+    /// the Work mirror's wipe-and-rebuild churn can change on every edit, silently orphaning
+    /// rows that a delta would never surface. This is the backstop that catches those.</summary>
+    private static readonly TimeSpan ReconciliationInterval = TimeSpan.FromHours(6);
+
     private readonly ISyncStore _syncStore;
     private readonly CalendarSyncStateStore _stateStore;
     private readonly CalendarEventIndexStore _indexStore;
@@ -72,8 +80,12 @@ public sealed class GoogleCalendarPullService
 
     private async Task PullOneAsync(CalendarConfig calendar, CancellationToken ct)
     {
-        var syncToken = await _stateStore.GetSyncTokenAsync(calendar.Id, ct);
         var now = DateTimeOffset.UtcNow;
+        var lastReconciled = await _stateStore.GetLastReconciledAsync(calendar.Id, ct);
+        var dueForReconciliation = lastReconciled is null || now - lastReconciled.Value >= ReconciliationInterval;
+
+        var syncToken = dueForReconciliation ? null : await _stateStore.GetSyncTokenAsync(calendar.Id, ct);
+        var isFullFetch = syncToken is null;
 
         Google.Apis.Calendar.v3.Data.Events page;
         try
@@ -86,7 +98,13 @@ public sealed class GoogleCalendarPullService
             // documented recovery for a 410).
             await _stateStore.SaveSyncTokenAsync(calendar.Id, null, ct);
             page = await FetchPageAsync(calendar.Id, syncToken: null, now, pageToken: null, ct);
+            isFullFetch = true;
         }
+
+        // Only a full fetch enumerates every currently-live event in the window, so only
+        // then do we have a complete enough picture to safely diff against — an incremental
+        // page is just a set of changes, not a live-vs-gone snapshot.
+        var liveExternalIds = isFullFetch ? new HashSet<string>() : null;
 
         while (true)
         {
@@ -129,6 +147,7 @@ public sealed class GoogleCalendarPullService
                     if (googleEvent.Id is not null)
                     {
                         await _indexStore.SaveAsync(calendar.Id, googleEvent.Id, mapped.Id, ct);
+                        liveExternalIds?.Add(googleEvent.Id);
                     }
                 }
             }
@@ -144,6 +163,24 @@ public sealed class GoogleCalendarPullService
         if (!string.IsNullOrEmpty(page.NextSyncToken))
         {
             await _stateStore.SaveSyncTokenAsync(calendar.Id, page.NextSyncToken, ct);
+        }
+
+        if (liveExternalIds is not null)
+        {
+            var allEntities = await _syncStore.GetAllAsync(ct);
+            var orphans = CalendarReconciler.FindOrphans(
+                allEntities, calendar.Id, liveExternalIds, now - LookBack, now + LookAhead);
+
+            foreach (var orphan in orphans)
+            {
+                await _syncStore.PutAsync(GoogleEventMapper.Tombstone(orphan.Id, orphan.ExternalId, calendar.Context, now), ct);
+                if (orphan.ExternalId is not null)
+                {
+                    await _indexStore.DeleteAsync(calendar.Id, orphan.ExternalId, ct);
+                }
+            }
+
+            await _stateStore.SaveLastReconciledAsync(calendar.Id, now, ct);
         }
     }
 

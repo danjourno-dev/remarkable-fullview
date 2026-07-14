@@ -88,6 +88,25 @@ public sealed class FullviewStack : Stack
         });
         table.GrantReadWriteData(entitiesFunction);
 
+        // Stage 7: handwriting capture upload. The device PUTs a changed Inbox page's raw
+        // `.rm` bytes here — it never gets S3 credentials of its own, only the same
+        // `x-api-key` it already holds for `/entities` — and this Lambda is the only thing
+        // with write access to inboxBucket.
+        var captureFunction = new Function(this, "CaptureFunction", new FunctionProps
+        {
+            FunctionName = $"{settings.ResourcePrefix}capture",
+            Runtime = Runtime.DOTNET_8,
+            Handler = "Fullview.Api::Fullview.Api.Functions.CaptureFunction::FunctionHandler",
+            Code = Code.FromAsset(ResolveLambdaAsset()),
+            MemorySize = 256,
+            Timeout = Duration.Seconds(10),
+            Environment = new Dictionary<string, string>
+            {
+                ["FULLVIEW_INBOX_BUCKET_NAME"] = inboxBucket.BucketName
+            }
+        });
+        inboxBucket.GrantWrite(captureFunction);
+
         // Single-user v1 auth (see docs/plans/implementation.md): one shared API key held as
         // a SecureString in SSM Parameter Store. CloudFormation can't create SecureString
         // parameters, so this stack never creates the parameter itself — Dan (or a forker)
@@ -284,6 +303,24 @@ public sealed class FullviewStack : Stack
             AuthorizerId = apiKeyAuthorizer.Ref
         });
 
+        var captureIntegration = new CfnIntegration(this, "CaptureIntegration", new CfnIntegrationProps
+        {
+            ApiId = httpApi.Ref,
+            IntegrationType = "AWS_PROXY",
+            IntegrationUri = captureFunction.FunctionArn,
+            IntegrationMethod = "POST",
+            PayloadFormatVersion = "2.0"
+        });
+
+        _ = new CfnRoute(this, "CapturePutRoute", new CfnRouteProps
+        {
+            ApiId = httpApi.Ref,
+            RouteKey = "PUT /captures/{pageId}",
+            Target = $"integrations/{captureIntegration.Ref}",
+            AuthorizationType = "CUSTOM",
+            AuthorizerId = apiKeyAuthorizer.Ref
+        });
+
         _ = new CfnStage(this, "DefaultStage", new CfnStageProps
         {
             ApiId = httpApi.Ref,
@@ -303,6 +340,13 @@ public sealed class FullviewStack : Stack
             Principal = new Amazon.CDK.AWS.IAM.ServicePrincipal("apigateway.amazonaws.com"),
             Action = "lambda:InvokeFunction",
             SourceArn = $"arn:aws:execute-api:{Region}:{Account}:{httpApi.Ref}/*/*/entities*"
+        });
+
+        captureFunction.AddPermission("ApiGatewayInvoke", new Permission
+        {
+            Principal = new Amazon.CDK.AWS.IAM.ServicePrincipal("apigateway.amazonaws.com"),
+            Action = "lambda:InvokeFunction",
+            SourceArn = $"arn:aws:execute-api:{Region}:{Account}:{httpApi.Ref}/*/*/captures*"
         });
 
         _ = new CfnOutput(this, "HttpApiUrl", new CfnOutputProps
@@ -421,6 +465,22 @@ public sealed class FullviewStack : Stack
         });
         authorizerErrorAlarm.AddAlarmAction(new SnsAction(alertTopic));
 
+        var captureErrorAlarm = new Alarm(this, "CaptureFunctionErrorAlarm", new AlarmProps
+        {
+            AlarmName = $"{settings.ResourcePrefix}capture-errors",
+            AlarmDescription = "Capture Lambda errored — check the inbox bucket and IAM policy.",
+            Metric = captureFunction.MetricErrors(new MetricOptions
+            {
+                Period = Duration.Minutes(5),
+                Statistic = Stats.SUM
+            }),
+            Threshold = 1,
+            EvaluationPeriods = 1,
+            ComparisonOperator = ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+            TreatMissingData = TreatMissingData.NOT_BREACHING
+        });
+        captureErrorAlarm.AddAlarmAction(new SnsAction(alertTopic));
+
         var calendarPullErrorAlarm = new Alarm(this, "CalendarPullFunctionErrorAlarm", new AlarmProps
         {
             AlarmName = $"{settings.ResourcePrefix}calendar-pull-errors",
@@ -491,7 +551,6 @@ public sealed class FullviewStack : Stack
         });
 
         _ = table;
-        _ = inboxBucket;
     }
 
     /// <summary>

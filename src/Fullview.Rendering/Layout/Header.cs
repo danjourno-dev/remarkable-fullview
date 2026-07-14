@@ -6,7 +6,12 @@ namespace Fullview.Rendering.Layout;
 
 /// <summary>
 /// Top title bar (mockup v4): board name for the current mode ("LIFE OPS"/"WORK OPS") plus a
-/// date/inbox subtitle. Sits above <see cref="NowNextStrip"/> on every screen.
+/// date/inbox subtitle. Sits above <see cref="NowNextStrip"/> on every screen. The subtitle's
+/// "SWIPE FROM TOP TO WRITE" segment is a static hint, not a tap target — AppLoad has no
+/// programmatic way to switch a running external app to xochitl (confirmed by reading its
+/// source), so capturing to the Inbox notebook is a manual drag-from-top-center-to-center
+/// gesture that only AppLoad's own window chrome recognises. See PROGRESS.md's Stage 7
+/// amendment decision.
 /// </summary>
 public static class Header
 {
@@ -42,7 +47,7 @@ public static class Header
         var titleFont = AppFont.Bold(TitleSize);
         AppFont.DrawText(image, title, innerX, titleY, titleFont, Black);
 
-        string subtitle = $"{DayName(date.DayOfWeek)} {date.Day:00} {MonthName(date.Month)}  //  INBOX {inboxStatus}";
+        string subtitle = $"{DayName(date.DayOfWeek)} {date.Day:00} {MonthName(date.Month)}  //  INBOX {inboxStatus}  //  SWIPE FROM TOP TO WRITE";
         var subtitleFont = AppFont.Regular(SubtitleSize);
         int subtitleY = Height - Margin - AppFont.LineHeight(subtitleFont) - 8;
         AppFont.DrawText(image, subtitle, innerX, subtitleY, subtitleFont, Black);

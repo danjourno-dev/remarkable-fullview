@@ -110,6 +110,21 @@ public sealed class GoogleCalendarPullService
                 var mapped = GoogleEventMapper.Map(googleEvent, calendar.Id, calendar.Context, now);
                 if (mapped is not null)
                 {
+                    // A moved event (changed start/end) keeps the same Google event id but
+                    // mints a new content-derived entity id (BuildEntityId). Google never
+                    // sends a "cancelled" notice for the old time slot in that case, so
+                    // without this check the old row would never be tombstoned and would
+                    // sync down to every client forever as a stale duplicate.
+                    if (googleEvent.Id is not null)
+                    {
+                        var previousEntityId = await _indexStore.GetEntityIdAsync(calendar.Id, googleEvent.Id, ct);
+                        if (previousEntityId is not null && previousEntityId != mapped.Id)
+                        {
+                            await _syncStore.PutAsync(
+                                GoogleEventMapper.Tombstone(previousEntityId, googleEvent.Id, calendar.Context, now), ct);
+                        }
+                    }
+
                     await _syncStore.PutAsync(mapped, ct);
                     if (googleEvent.Id is not null)
                     {
@@ -137,17 +152,20 @@ public sealed class GoogleCalendarPullService
     {
         var request = _calendarService.Events.List(calendarId);
         request.SingleEvents = true;
-        request.OrderBy = EventsResource.ListRequest.OrderByEnum.StartTime;
         request.PageToken = pageToken;
 
         if (!string.IsNullOrEmpty(syncToken))
         {
-            // TimeMin/TimeMax are invalid alongside SyncToken — Google's incremental sync
-            // already scopes results to what changed, not to a time window.
+            // TimeMin/TimeMax/OrderBy are invalid alongside SyncToken — Google's incremental
+            // sync already scopes results to what changed, not to a time window, and (per
+            // Google's docs) omits nextSyncToken from the response entirely whenever OrderBy
+            // is set, which would permanently prevent this service from ever re-entering
+            // incremental mode.
             request.SyncToken = syncToken;
         }
         else
         {
+            request.OrderBy = EventsResource.ListRequest.OrderByEnum.StartTime;
             request.TimeMinDateTimeOffset = now - LookBack;
             request.TimeMaxDateTimeOffset = now + LookAhead;
         }

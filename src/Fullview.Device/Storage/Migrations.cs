@@ -38,5 +38,27 @@ internal static class Migrations
                 value TEXT NOT NULL
             );
             """),
+
+        // Stage 7: handwriting capture. capture_pages tracks the last-uploaded content hash
+        // per Inbox page so InboxWatcher only re-uploads a page whose bytes actually changed
+        // since the last successful upload. capture_outbox queues pages whose bytes need
+        // uploading via PUT /captures/{pageId} — separate from the `outbox` table (entity
+        // JSON mutations) because these rows carry a file path to raw `.rm` bytes, not a
+        // SyncEntity payload.
+        new Migration(2, """
+            CREATE TABLE capture_pages (
+                page_id TEXT PRIMARY KEY,
+                content_hash TEXT NOT NULL,
+                uploaded_at TEXT NOT NULL
+            );
+
+            CREATE TABLE capture_outbox (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                page_id TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                queued_at TEXT NOT NULL
+            );
+            """),
     ];
 }
